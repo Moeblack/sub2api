@@ -152,8 +152,9 @@ func TestOpenAIGatewayService_SetupTokenLegacy_SanitizesAndTransforms(t *testing
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, "https://chatgpt.com/backend-api/codex/responses", upstream.lastReq.URL.String())
 	require.Equal(t, false, gjson.GetBytes(upstream.lastBody, "store").Bool())
-	require.Equal(t, "max", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning.mode").Exists())
+	// GPT-5.6 pro mode is independent of effort even with legacy credentials.
+	require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning.effort").Exists())
+	require.Equal(t, "pro", gjson.GetBytes(upstream.lastBody, "reasoning.mode").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input.0.id").Exists())
 	require.Len(t, gjson.GetBytes(upstream.lastBody, "input").Array(), 1)
 }

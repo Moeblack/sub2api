@@ -27,13 +27,17 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 
 	out := &ResponsesRequest{
-		Model:             req.Model,
-		Instructions:      req.Instructions,
-		Input:             inputJSON,
-		Stream:            true, // upstream always streams
-		Include:           []string{"reasoning.encrypted_content"},
-		ServiceTier:       req.ServiceTier,
-		ParallelToolCalls: req.ParallelToolCalls,
+		Model:                req.Model,
+		Instructions:         req.Instructions,
+		Input:                inputJSON,
+		Stream:               true, // upstream always streams
+		Include:              []string{"reasoning.encrypted_content"},
+		ServiceTier:          req.ServiceTier,
+		ParallelToolCalls:    req.ParallelToolCalls,
+		PromptCacheKey:       req.PromptCacheKey,
+		PromptCacheOptions:   req.PromptCacheOptions,
+		PromptCacheRetention: req.PromptCacheRetention,
+		SafetyIdentifier:     req.SafetyIdentifier,
 	}
 
 	// Reasoning models (gpt-5.x) do not accept sampling parameters.
@@ -115,7 +119,7 @@ func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputIt
 // ResponsesInputItem values.
 func chatMessageToResponsesItems(m ChatMessage) ([]ResponsesInputItem, error) {
 	switch m.Role {
-	case "system":
+	case "system", "developer":
 		return chatSystemToResponses(m)
 	case "user":
 		return chatUserToResponses(m)
@@ -140,7 +144,7 @@ func chatSystemToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []ResponsesInputItem{{Role: "system", Content: content}}, nil
+	return []ResponsesInputItem{{Role: m.Role, Content: content}}, nil
 }
 
 // chatUserToResponses converts a user message, handling both plain strings and
@@ -164,13 +168,17 @@ func chatUserToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	var items []ResponsesInputItem
 	content := ""
+	cacheParts, hasCacheBreakpoints, err := chatAssistantCacheParts(m.Content)
+	if err != nil {
+		return nil, err
+	}
 
 	if m.ReasoningContent != "" {
 		content = "<thinking>" + m.ReasoningContent + "</thinking>"
 	}
 
 	// Emit assistant message with output_text if content is non-empty.
-	if len(m.Content) > 0 {
+	if len(m.Content) > 0 && !hasCacheBreakpoints {
 		s, err := parseAssistantContent(m.Content)
 		if err != nil {
 			return nil, err
@@ -183,8 +191,12 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 		}
 	}
 
-	if content != "" {
-		parts := []ResponsesContentPart{{Type: "output_text", Text: content}}
+	if content != "" || hasCacheBreakpoints {
+		var parts []ResponsesContentPart
+		if content != "" {
+			parts = append(parts, ResponsesContentPart{Type: "output_text", Text: content})
+		}
+		parts = append(parts, cacheParts...)
 		partsJSON, err := json.Marshal(parts)
 		if err != nil {
 			return nil, err
@@ -207,6 +219,37 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	}
 
 	return items, nil
+}
+
+// Retain explicit boundaries instead of combining marked assistant blocks into
+// one text block. Unmarked histories keep the existing concatenation behavior.
+func chatAssistantCacheParts(raw json.RawMessage) ([]ResponsesContentPart, bool, error) {
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil, false, nil
+	}
+	var output []ResponsesContentPart
+	marked := false
+	for _, part := range parts {
+		var metadata struct {
+			Breakpoint json.RawMessage `json:"prompt_cache_breakpoint"`
+		}
+		if err := json.Unmarshal(part, &metadata); err != nil {
+			return nil, false, nil
+		}
+		if len(metadata.Breakpoint) > 0 && string(metadata.Breakpoint) != "null" {
+			marked = true
+		}
+		text, err := parseAssistantContent(append(append([]byte{'['}, part...), ']'))
+		if err != nil {
+			return nil, false, err
+		}
+		output = append(output, ResponsesContentPart{Type: "output_text", Text: text, PromptCacheBreakpoint: metadata.Breakpoint})
+	}
+	if !marked {
+		return nil, false, nil
+	}
+	return output, true, nil
 }
 
 // parseAssistantContent returns assistant content as plain text.
@@ -282,6 +325,19 @@ func parseAssistantContent(raw json.RawMessage) (string, error) {
 // chatToolToResponses converts a tool result message (role=tool) into a
 // function_call_output item.
 func chatToolToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
+	parsed, err := parseChatMessageContent(m.Content)
+	if err != nil {
+		return nil, err
+	}
+	for _, part := range parsed.Parts {
+		if len(part.PromptCacheBreakpoint) > 0 && string(part.PromptCacheBreakpoint) != "null" {
+			output, err := json.Marshal(convertChatContentPartsToResponses(parsed.Parts))
+			if err != nil {
+				return nil, err
+			}
+			return []ResponsesInputItem{{Type: "function_call_output", CallID: m.ToolCallID, Output: string(output), outputRaw: output}}, nil
+		}
+	}
 	output, err := parseChatContent(m.Content)
 	if err != nil {
 		return nil, err
@@ -367,24 +423,28 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 		case "text":
 			if p.Text != "" {
 				responseParts = append(responseParts, ResponsesContentPart{
-					Type: "input_text",
-					Text: p.Text,
+					Type:                  "input_text",
+					Text:                  p.Text,
+					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 				})
 			}
 		case "image_url":
 			if p.ImageURL != nil && p.ImageURL.URL != "" && !isEmptyBase64DataURI(p.ImageURL.URL) {
 				responseParts = append(responseParts, ResponsesContentPart{
-					Type:     "input_image",
-					ImageURL: p.ImageURL.URL,
+					Type:                  "input_image",
+					ImageURL:              p.ImageURL.URL,
+					Detail:                p.ImageURL.Detail,
+					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 				})
 			}
 		case "file":
 			if p.File != nil && (p.File.FileData != "" || p.File.FileID != "") {
 				responseParts = append(responseParts, ResponsesContentPart{
-					Type:     "input_file",
-					Filename: p.File.Filename,
-					FileData: p.File.FileData,
-					FileID:   p.File.FileID,
+					Type:                  "input_file",
+					Filename:              p.File.Filename,
+					FileData:              p.File.FileData,
+					FileID:                p.File.FileID,
+					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 				})
 			}
 		}

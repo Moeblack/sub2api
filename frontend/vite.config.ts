@@ -87,7 +87,10 @@ export default defineConfig(({ mode }) => {
     plugins: [
       vue(),
       checker({
-        vueTsc: true
+        vueTsc: true,
+        // The build script runs vue-tsc before Vite. Keep development checks
+        // without launching a second typecheck alongside production bundling.
+        enableBuild: false
       }),
       injectPublicSettings(backendUrl)
     ],

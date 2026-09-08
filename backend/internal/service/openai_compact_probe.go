@@ -28,19 +28,20 @@ func normalizeAccountTestMode(mode string) string {
 // POST /responses/compact body. ChatGPT OAuth has no public compact endpoint,
 // so it uses the internal streaming /responses remote-compaction-v2 wire.
 func createOpenAICompactProbePayload(model string, isOAuth bool) map[string]any {
+	input := []any{
+		map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": "Respond with OK.",
+		},
+	}
 	payload := map[string]any{
 		"model":        strings.TrimSpace(model),
 		"instructions": "You are a helpful coding assistant.",
-		"input": []any{
-			map[string]any{
-				"type":    "message",
-				"role":    "user",
-				"content": "Respond with OK.",
-			},
-		},
+		"input":        input,
 	}
 	if isOAuth {
-		payload["input"] = append(payload["input"].([]any), map[string]any{"type": "compaction_trigger"})
+		payload["input"] = append(input, map[string]any{"type": "compaction_trigger"})
 		payload["stream"] = true
 		// ChatGPT internal API requires stateless storage for this wire.
 		payload["store"] = false

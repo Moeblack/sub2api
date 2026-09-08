@@ -63,9 +63,11 @@ func TestOpenAIWSHTTPBridgeDelegationSurvivesReplay(t *testing.T) {
 	writeIsolationFrame(t, conn, `{"type":"response.create","model":"gpt-5.1","store":false,"input":[{"type":"function_call","call_id":"call_old","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_old","output":"old result"},{"type":"function_call_output","id":"fco_report","namespace":"codex_app","name":"send_message_to_thread","output":"`+delegationEnvelope+`"}]}`)
 	first := readCompleted()
 	assertDelegations(first, delegationEnvelope)
-	// The existing OAuth adapter canonicalizes both sides of a tool pair.
-	require.Equal(t, "fc_old", gjson.GetBytes(first, "input.0.call_id").String())
-	require.Equal(t, "fc_old", gjson.GetBytes(first, "input.1.call_id").String())
+	// Native Responses IDs are opaque. Both sides must retain the original
+	// correlation key; a legacy call_ -> fc_ rewrite breaks delayed results
+	// when the matching call survives only in upstream or compacted history.
+	require.Equal(t, "call_old", gjson.GetBytes(first, "input.0.call_id").String())
+	require.Equal(t, "call_old", gjson.GetBytes(first, "input.1.call_id").String())
 	require.Equal(t, "old result", gjson.GetBytes(first, "input.1.output").String())
 
 	// Merge a genuine tool result and a second report with the response snapshot.
@@ -73,15 +75,21 @@ func TestOpenAIWSHTTPBridgeDelegationSurvivesReplay(t *testing.T) {
 	second := readCompleted()
 	assertDelegations(second, delegationEnvelope, secondEnvelope)
 	require.Equal(t, "function_call", gjson.GetBytes(second, "input.3.type").String())
-	require.Equal(t, "fc_next", gjson.GetBytes(second, "input.3.call_id").String())
-	require.Equal(t, "fc_next", gjson.GetBytes(second, "input.4.call_id").String())
+	require.Equal(t, "fc_next", gjson.GetBytes(second, "input.3.id").String(), "item ID and call ID are separate namespaces")
+	require.Equal(t, "call_next", gjson.GetBytes(second, "input.3.call_id").String())
+	require.Equal(t, "call_next", gjson.GetBytes(second, "input.4.call_id").String())
 	require.Equal(t, "new result", gjson.GetBytes(second, "input.4.output").String())
 
 	// A plain continuation must replay normalized snapshots, not lose the reports.
 	writeIsolationFrame(t, conn, `{"type":"response.create","model":"gpt-5.1","store":false,"previous_response_id":"resp_delegation_2","input":[{"type":"message","role":"user","content":"continue"}]}`)
 	third := readCompleted()
 	assertDelegations(third, delegationEnvelope, secondEnvelope)
+	require.Equal(t, "call_old", gjson.GetBytes(third, "input.0.call_id").String())
+	require.Equal(t, "call_old", gjson.GetBytes(third, "input.1.call_id").String())
+	require.Equal(t, "call_next", gjson.GetBytes(third, "input.3.call_id").String())
+	require.Equal(t, "call_next", gjson.GetBytes(third, "input.4.call_id").String())
 	require.Equal(t, "continue", gjson.GetBytes(third, "input.6.content").String())
+	require.EqualValues(t, 3, calls.Load(), "replaying history must not replay completed executions")
 	require.NoError(t, conn.Close(coderws.StatusNormalClosure, "complete"))
 }
 

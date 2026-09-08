@@ -763,13 +763,22 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dial := func(t *testing.T, router *gin.Engine) (*coderws.Conn, func()) {
 		t.Helper()
-		server := httptest.NewServer(router)
+		handlerDone := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(handlerDone)
+			router.ServeHTTP(w, r)
+		}))
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/openai/v1/responses", nil)
 		cancel()
 		require.NoError(t, err)
 		return conn, func() {
 			_ = conn.CloseNow()
+			select {
+			case <-handlerDone:
+			case <-time.After(3 * time.Second):
+				t.Error("websocket handler did not stop after client disconnect")
+			}
 			server.Close()
 		}
 	}
@@ -793,30 +802,49 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, string(payload), "resp_healthy")
 		require.Equal(t, []int64{801}, repo.errorIDs())
-		require.Equal(t, 2, repo.selectorCalls())
+		// Grok WS selects once to choose the HTTP bridge, then the bridge's
+		// Responses execution owns credential failover. Count actual upstream
+		// executions so the routing-only selection cannot look like a replay.
 		require.Equal(t, []int64{802}, upstream.accountHits())
+		requestURLs, authorization := upstream.requests()
+		require.Equal(t, []string{xai.DefaultCLIBaseURL + "/responses"}, requestURLs)
+		require.Equal(t, []string{"Bearer healthy-access"}, authorization)
 	})
 
 	t.Run("provider configuration stops", func(t *testing.T) {
-		_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "provider")
+		h, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "provider")
 		defer cleanup()
 		conn, closeConn := dial(t, router)
 		defer closeConn()
 		writeFirst(t, conn)
 
 		readCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_, _, err := conn.Read(readCtx)
+		_, payload, err := conn.Read(readCtx)
 		cancel()
-		var closeErr coderws.CloseError
-		require.ErrorAs(t, err, &closeErr)
-		require.Contains(t, closeErr.Reason, service.GrokCredentialUnavailableClientMessage)
-		require.Equal(t, 1, repo.selectorCalls())
+		require.NoError(t, err)
+		var event struct {
+			Type   string `json:"type"`
+			Status int    `json:"status"`
+			Error  struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &event))
+		require.Equal(t, "error", event.Type)
+		require.Equal(t, http.StatusServiceUnavailable, event.Status)
+		require.Contains(t, event.Error.Message, service.GrokCredentialUnavailableClientMessage)
+		require.NotContains(t, string(payload), "revoked-refresh")
+		require.Empty(t, repo.errorIDs())
 		require.Empty(t, upstream.accountHits())
+		require.Zero(t, h.gatewayService.SnapshotOpenAIAccountSchedulerMetrics().RuntimeStatsAccountCount,
+			"provider-scoped auth failure must not penalize the selected account")
 	})
 
 	t.Run("parent cancellation prevents reselection", func(t *testing.T) {
 		_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "cancel")
 		defer cleanup()
+		before, err := repo.GetByID(context.Background(), 801)
+		require.NoError(t, err)
 		conn, closeConn := dial(t, router)
 		writeFirst(t, conn)
 		select {
@@ -824,11 +852,18 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("credential refresh did not start")
 		}
+		selectionsBeforeCancel := repo.selectorCalls()
 		closeConn()
 
-		require.Eventually(t, func() bool { return repo.selectorCalls() == 1 }, 2*time.Second, 20*time.Millisecond)
+		require.Equal(t, selectionsBeforeCancel, repo.selectorCalls(), "client cancellation must not start another account selection")
 		require.Empty(t, repo.errorIDs())
+		require.Empty(t, repo.setTempIDs)
 		require.Empty(t, upstream.accountHits())
+		after, err := repo.GetByID(context.Background(), 801)
+		require.NoError(t, err)
+		require.Equal(t, before.Credentials, after.Credentials)
+		require.Equal(t, before.Status, after.Status)
+		require.Equal(t, before.Schedulable, after.Schedulable)
 	})
 }
 

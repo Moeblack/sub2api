@@ -805,7 +805,7 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIHTTPResponseForContext(ctx co
 		return false
 	}
 	return (isOpenAIOAuthAccount(account) && isOpenAICodexPlanGatedModelError(statusCode, responseBody)) ||
-		s.shouldFailoverOpenAIUpstreamResponse(statusCode, extractUpstreamErrorMessage(responseBody), responseBody)
+		s.shouldFailoverOpenAIUpstreamResponse(account, statusCode, extractUpstreamErrorMessage(responseBody), responseBody)
 }
 
 func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, responseBody []byte) bool {
@@ -2144,6 +2144,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					} else {
 						s.handleOpenAIStreamTerminalAccountSideEffects(c, account, dataBytes, failedMessage, resp.Header, mappedModel)
 						bareErrorAccountSideEffectsPending = false
+					}
+					if eventType == "response.failed" {
+						// The stream cannot be replayed after semantic output. Preserve the
+						// terminal event, while making the upstream failure queryable.
+						s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
 					}
 				}
 				if !outputStarted {

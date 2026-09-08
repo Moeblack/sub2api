@@ -18,6 +18,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/Wei-Shaw/sub2api/internal/testutil/containertest"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
@@ -68,6 +69,7 @@ func TestMain(m *testing.M) {
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
 		tcpostgres.BasicWaitStrategies(),
+		containertest.WithBindAddress("5432/tcp"),
 	)
 	if err != nil {
 		log.Printf("failed to start postgres container: %v", err)
@@ -78,6 +80,7 @@ func TestMain(m *testing.M) {
 	redisContainer, err := tcredis.Run(
 		ctx,
 		redisImageTag,
+		containertest.WithBindAddress("6379/tcp"),
 	)
 	if err != nil {
 		log.Printf("failed to start redis container: %v", err)

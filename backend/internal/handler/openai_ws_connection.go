@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -95,6 +97,11 @@ func (h *OpenAIGatewayHandler) runOpenAIWSHTTPConnection(c, base *gin.Context, c
 		ValidateWarmup: func(ctx context.Context, request service.OpenAIWSConnectionRequest) error {
 			execution := base.Copy()
 			execution.Request = base.Request.Clone(ctx)
+			if apiKey != nil {
+				if denied := validateOpenAIWSModelAllowlist(execution, apiKey.Group, request.RawPayload, request.Payload); denied != nil {
+					return denied
+				}
+			}
 			return h.validateOpenAIWSWarmup(execution, request.Payload)
 		},
 		ObserveClosed: func(outcome service.OpenAIWSConnectionOutcome) {
@@ -128,6 +135,11 @@ func (h *OpenAIGatewayHandler) runOpenAIWSHTTPConnection(c, base *gin.Context, c
 			ctx = context.WithValue(ctx, ctxkey.RequestID, executionID)
 			execution := base.Copy()
 			execution.Request = base.Request.Clone(ctx)
+			if apiKey != nil {
+				if denied := validateOpenAIWSModelAllowlist(execution, apiKey.Group, request.RawPayload, request.Payload); denied != nil {
+					return denied
+				}
+			}
 			execution.Request.Method = http.MethodPost
 			execution.Request.Body = io.NopCloser(bytes.NewReader(request.Payload))
 			execution.Request.ContentLength = int64(len(request.Payload))
@@ -159,8 +171,36 @@ func (h *OpenAIGatewayHandler) runOpenAIWSHTTPConnection(c, base *gin.Context, c
 	}
 }
 
+func (h *OpenAIGatewayHandler) recordOpenAIWSNativeTurnOps(connection, execution *gin.Context) {
+	for _, streamError := range service.GetOpsStreamErrors(execution) {
+		if h.opsService != nil {
+			logOpsStreamErrorValue(execution, h.opsService, http.StatusSwitchingProtocols, streamError)
+			continue
+		}
+		errorsForRequest := service.GetOpsStreamErrors(connection)
+		if len(errorsForRequest) < 64 {
+			errorsForRequest = append(errorsForRequest, streamError)
+			connection.Set(service.OpsStreamErrorsKey, errorsForRequest)
+			connection.Set(service.OpsStreamErrorKey, errorsForRequest[len(errorsForRequest)-1])
+		}
+	}
+}
+
 func (h *OpenAIGatewayHandler) useOpenAIWSHTTPConnectionRuntime() bool {
 	return h != nil && h.cfg != nil && h.cfg.Gateway.OpenAIWS.ForceHTTP
+}
+
+// Raw frames can contain duplicate or case-variant model keys that are lost
+// during bridge materialization. Effective payloads also carry inherited models.
+func validateOpenAIWSModelAllowlist(c *gin.Context, group *service.Group, payloads ...[]byte) *service.OpenAIWSRequestError {
+	for _, payload := range payloads {
+		if blocked := blockedModelAllowlistCandidate(group, requestmodel.FromBodyCandidates("", "application/json", payload)); blocked != "" {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
+			middleware2.MarkIngressRejected(c, middleware2.IngressRejectModelNotAllowed)
+			return &service.OpenAIWSRequestError{Status: http.StatusNotFound, Code: "model_not_found", Message: fmt.Sprintf("Model %q is not available for this group", blocked), Param: "model"}
+		}
+	}
+	return nil
 }
 
 // Warmup performs admission checks, including the existing request-rate gate,
@@ -172,6 +212,9 @@ func (h *OpenAIGatewayHandler) validateOpenAIWSWarmup(c *gin.Context, payload []
 	}
 	if _, ok := middleware2.GetAuthSubjectFromContext(c); !ok {
 		return &service.OpenAIWSRequestError{Status: 401, Code: "authentication_error", Message: "User context not found"}
+	}
+	if denied := validateOpenAIWSModelAllowlist(c, apiKey.Group, payload); denied != nil {
+		return denied
 	}
 	model := gjson.GetBytes(payload, "model").String()
 	ensureCompositeTargetPlatform(c, apiKey, model)

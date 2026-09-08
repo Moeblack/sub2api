@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/testutil/containertest"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
@@ -48,7 +49,7 @@ func startAuthRouteRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 	ensureAuthRouteDockerAvailable(t)
 
-	redisContainer, err := tcredis.Run(ctx, authRouteRedisImageTag)
+	redisContainer, err := tcredis.Run(ctx, authRouteRedisImageTag, containertest.WithBindAddress("6379/tcp"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = redisContainer.Terminate(ctx)

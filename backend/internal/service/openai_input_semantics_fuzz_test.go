@@ -32,7 +32,14 @@ func FuzzOpenAIStandaloneInputPreservation(f *testing.F) {
 			return result
 		}
 		before, after := decode(body), decode(got)
-		left, right := before["input"].([]any), after["input"].([]any)
+		left, ok := before["input"].([]any)
+		if !ok {
+			t.Fatalf("original input must be an array, got %T", before["input"])
+		}
+		right, ok := after["input"].([]any)
+		if !ok {
+			t.Fatalf("normalized input must be an array, got %T", after["input"])
+		}
 		if len(left) != len(right) {
 			t.Fatal("normalization changed history length")
 		}
@@ -41,7 +48,7 @@ func FuzzOpenAIStandaloneInputPreservation(f *testing.F) {
 				continue
 			}
 			item, ok := original.(map[string]any)
-			if !ok || !(isCodexDelegationCandidate(item) || isCodexAutomationCandidate(item)) {
+			if !ok || !isCodexDelegationCandidate(item) && !isCodexAutomationCandidate(item) {
 				t.Fatal("unrelated history item changed")
 			}
 			if value, exists := item["call_id"]; exists {

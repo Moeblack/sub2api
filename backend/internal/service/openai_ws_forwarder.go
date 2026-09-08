@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -243,6 +244,17 @@ func (e *OpenAIWSClientCloseError) Reason() string {
 
 // OpenAIWSIngressHooks 定义入站 WS 每个 turn 的生命周期回调。
 type OpenAIWSIngressHooks struct {
+	// NativeResponses enables the official multiplexed Responses wire protocol
+	// only after handler admission approves a native-capable account route.
+	NativeResponses bool
+	// NativeTurnContext isolates moderation and ops state for concurrent responses.
+	// Callers must first attribute an event to its admitted response.
+	NativeTurnContext func(turn int) *gin.Context
+	// ContinueTurn transfers admission from a steering parent to the automatic
+	// successor before the parent's AfterTurn records its terminal usage.
+	ContinueTurn func(previousTurn, turn int) error
+	// ReleaseTurn releases a reserved or rejected response without inventing usage.
+	ReleaseTurn func(turn int)
 	// ClientLifecycleContext is the request context before an ingress lease
 	// adds its independent cancellation signal. Downstream writes bind to it
 	// so shutdown and disconnect cancellation remain direct during lease loss.

@@ -132,12 +132,16 @@ func outputTextPartWire(part *ResponsesContentPart) map[string]any {
 	if part != nil {
 		text = part.Text
 	}
-	return map[string]any{
+	m := map[string]any{
 		"type":        "output_text",
 		"text":        text,
 		"annotations": []any{},
 		"logprobs":    []any{},
 	}
+	if part != nil && len(part.PromptCacheBreakpoint) > 0 {
+		m["prompt_cache_breakpoint"] = part.PromptCacheBreakpoint
+	}
+	return m
 }
 
 // summaryTextPartWire renders a reasoning summary part.
@@ -166,6 +170,9 @@ func responsesItemWire(item *ResponsesOutput) map[string]any {
 	}
 	if item.Status != "" {
 		m["status"] = item.Status
+	}
+	if item.Async != nil && (item.Type == "function_call" || item.Type == "custom_tool_call") {
+		m["async"] = *item.Async
 	}
 	switch item.Type {
 	case "message":
@@ -214,7 +221,11 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		if typ == "" {
 			typ = "output_text"
 		}
-		out = append(out, map[string]any{"type": typ, "text": p.Text})
+		part := map[string]any{"type": typ, "text": p.Text}
+		if len(p.PromptCacheBreakpoint) > 0 {
+			part["prompt_cache_breakpoint"] = p.PromptCacheBreakpoint
+		}
+		out = append(out, part)
 	}
 	return out
 }

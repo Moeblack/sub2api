@@ -953,6 +953,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	nativeResponses := hooks != nil && hooks.NativeResponses
+	if nativeResponses {
+		if err := validateOpenAIWSNativeEnvelope(firstClientMessage); err != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid native websocket event envelope", err)
+		}
+		if gjson.GetBytes(firstClientMessage, "type").String() != "response.create" {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "first native websocket event must be response.create", nil)
+		}
+	}
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
@@ -977,7 +986,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 	// Keep an account-neutral copy. Every account-specific compatibility,
 	// identity, alias and model rewrite below must be recomputed after failover.
 	firstClientReplaySource := append([]byte(nil), firstClientMessage...)
-	if isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
+	if !nativeResponses && isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(firstClientMessage, account)
 		if liteErr != nil {
 			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
@@ -1070,7 +1079,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 		firstClientMessage = s.ReplaceModelInBody(firstClientMessage, capturedSessionModel)
 	}
 	firstMessageResponsesLite := isOpenAIResponsesLiteWebSocketPayload(firstClientMessage)
-	if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(firstClientMessage, account, firstMessageResponsesLite); normalizeErr != nil {
+	// Native protocol state (including opaque item references and delayed tool
+	// outputs) belongs to the upstream connection. HTTP compatibility repairs
+	// must not reinterpret those inputs using an incomplete local history.
+	if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyForMode(firstClientMessage, account, firstMessageResponsesLite, nativeResponses); normalizeErr != nil {
 		return fmt.Errorf("normalize first websocket response.create: %w", normalizeErr)
 	} else if compatibilityChanged {
 		firstClientMessage = normalized
@@ -1115,13 +1127,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
-	turnReplayState, replayStateErr := newOpenAIWSPassthroughTurnReplayState(firstClientReplaySource, initialRequestModel)
-	if replayStateErr != nil {
-		return NewOpenAIWSClientCloseError(
-			coderws.StatusPolicyViolation,
-			"invalid websocket replay input",
-			replayStateErr,
-		)
+	var turnReplayState *openAIWSPassthroughTurnReplayState
+	if !nativeResponses {
+		var replayStateErr error
+		turnReplayState, replayStateErr = newOpenAIWSPassthroughTurnReplayState(firstClientReplaySource, initialRequestModel)
+		if replayStateErr != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"invalid websocket replay input",
+				replayStateErr,
+			)
+		}
 	}
 
 	// 在 policy filter 之后再提取 service_tier / reasoning_effort 用于
@@ -1252,6 +1268,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 	upstreamFrameConn, ok := upstreamConn.(openaiwsv2.FrameConn)
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
+	}
+	if nativeResponses {
+		return s.proxyOpenAIWSNative(ctx, c, clientConn, upstreamFrameConn, account, firstClientMessage, initialRequestModel, originalFirstClientMessage, handshakeHeaders, hooks)
 	}
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
 		inner:             upstreamFrameConn,
@@ -1436,6 +1455,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 				}
 				if hooks != nil && hooks.BeforeRequest != nil {
 					if err := hooks.BeforeRequest(turnNo, payload, requestModelForThisFrame); err != nil {
+						return payload, nil, err
+					}
+				}
+				if hooks != nil && hooks.BeforeTurn != nil {
+					if err := hooks.BeforeTurn(turnNo); err != nil {
 						return payload, nil, err
 					}
 				}
@@ -1756,6 +1780,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2PassthroughAttempt(
 						reason,
 						truncateOpenAIWSLogValue(relayErrorText(retryErr), openAIWSLogValueMaxLen),
 					)
+					if turnNo > 1 {
+						// The exhausted account cannot continue this connection,
+						// but incomplete or account-bound history cannot move to
+						// another account safely. Ask the client to reconnect;
+						// never fall back to replaying the retained first request.
+						return NewOpenAIWSClientCloseError(
+							coderws.StatusTryAgainLater,
+							"upstream rate limit exceeded; please reconnect",
+							errors.New("later passthrough turn cannot be safely replayed"),
+						)
+					}
 					return nil
 				}
 				logOpenAIWSV2Passthrough(

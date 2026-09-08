@@ -43,8 +43,8 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 // ResponsesToChatCompletionsRequestWithOptions is ResponsesToChatCompletionsRequest
 // with optional hooks (see ResponsesToChatOptions).
 func ResponsesToChatCompletionsRequestWithOptions(req *ResponsesRequest, opts *ResponsesToChatOptions) (*ChatCompletionsRequest, error) {
-	if req == nil {
-		return nil, fmt.Errorf("responses request is nil")
+	if err := validateResponsesNativeFeatures(req, "Chat Completions"); err != nil {
+		return nil, err
 	}
 
 	messages, err := responsesInputToChatMessagesWithOptions(req.Instructions, req.Input, opts)
@@ -53,14 +53,18 @@ func ResponsesToChatCompletionsRequestWithOptions(req *ResponsesRequest, opts *R
 	}
 
 	out := &ChatCompletionsRequest{
-		Model:               req.Model,
-		Messages:            messages,
-		MaxCompletionTokens: req.MaxOutputTokens,
-		Temperature:         req.Temperature,
-		TopP:                req.TopP,
-		Stream:              req.Stream,
-		ServiceTier:         req.ServiceTier,
-		ParallelToolCalls:   req.ParallelToolCalls,
+		Model:                req.Model,
+		Messages:             messages,
+		MaxCompletionTokens:  req.MaxOutputTokens,
+		Temperature:          req.Temperature,
+		TopP:                 req.TopP,
+		Stream:               req.Stream,
+		ServiceTier:          req.ServiceTier,
+		ParallelToolCalls:    req.ParallelToolCalls,
+		PromptCacheKey:       req.PromptCacheKey,
+		PromptCacheOptions:   req.PromptCacheOptions,
+		PromptCacheRetention: req.PromptCacheRetention,
+		SafetyIdentifier:     req.SafetyIdentifier,
 	}
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
@@ -502,6 +506,11 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 				continue
 			}
 			delete(mediaByCallID, callID)
+			if content, marked := responsesToolOutputWithCacheBreakpoints(outputRaw); marked {
+				messages = append(messages, ChatMessage{Role: "tool", ToolCallID: callID, Content: content})
+				pendingReasoning = ""
+				continue
+			}
 
 			outputText, media, rewritten := extractToolOutputMedia(outputRaw)
 			if rewritten {
@@ -924,10 +933,36 @@ func responsesContentToChatContent(raw json.RawMessage, role string) (json.RawMe
 	return raw, nil
 }
 
+// Chat tool messages accept arrays of text parts. Retain native cache markers
+// there; mixed media still follows the existing media adaptation path.
+func responsesToolOutputWithCacheBreakpoints(raw json.RawMessage) (json.RawMessage, bool) {
+	var parts []ResponsesContentPart
+	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+		return nil, false
+	}
+	marked := false
+	chatParts := make([]ChatContentPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Type != "input_text" && part.Type != "output_text" && part.Type != "text" {
+			return nil, false
+		}
+		if len(part.PromptCacheBreakpoint) > 0 && string(part.PromptCacheBreakpoint) != "null" {
+			marked = true
+		}
+		chatParts = append(chatParts, ChatContentPart{Type: "text", Text: part.Text, PromptCacheBreakpoint: part.PromptCacheBreakpoint})
+	}
+	if !marked {
+		return nil, false
+	}
+	content, err := json.Marshal(chatParts)
+	return content, err == nil
+}
+
 func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string) (json.RawMessage, error) {
 	var textParts []string
 	var chatParts []ChatContentPart
 	hasNonText := false
+	hasCacheBreakpoint := false
 
 	for _, rawPart := range rawParts {
 		var part map[string]json.RawMessage
@@ -935,6 +970,10 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 			continue
 		}
 		partType := rawString(part["type"])
+		breakpoint := part["prompt_cache_breakpoint"]
+		if len(breakpoint) > 0 && string(breakpoint) != "null" {
+			hasCacheBreakpoint = true
+		}
 		switch partType {
 		case "input_text", "output_text", "text", "":
 			text := rawString(part["text"])
@@ -942,7 +981,7 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 				continue
 			}
 			textParts = append(textParts, text)
-			chatParts = append(chatParts, ChatContentPart{Type: "text", Text: text})
+			chatParts = append(chatParts, ChatContentPart{Type: "text", Text: text, PromptCacheBreakpoint: breakpoint})
 		case "input_image", "image_url":
 			imageURL := rawString(part["image_url"])
 			if imageURL == "" {
@@ -953,17 +992,18 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 			}
 			hasNonText = true
 			chatParts = append(chatParts, ChatContentPart{
-				Type:     "image_url",
-				ImageURL: &ChatImageURL{URL: imageURL},
+				Type:                  "image_url",
+				ImageURL:              &ChatImageURL{URL: imageURL, Detail: rawString(part["detail"])},
+				PromptCacheBreakpoint: breakpoint,
 			})
 		}
 	}
 
-	if !hasNonText {
+	if !hasNonText && !hasCacheBreakpoint {
 		joined, _ := json.Marshal(strings.Join(textParts, "\n\n"))
 		return joined, nil
 	}
-	if role != "user" {
+	if role != "user" && hasNonText {
 		joined, _ := json.Marshal(strings.Join(textParts, "\n\n"))
 		return joined, nil
 	}
@@ -975,6 +1015,13 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 }
 
 func chatContentFromSingleResponsesPart(partType string, part map[string]json.RawMessage) (json.RawMessage, error) {
+	if len(part["prompt_cache_breakpoint"]) > 0 {
+		raw, err := json.Marshal(part)
+		if err != nil {
+			return nil, err
+		}
+		return responsesContentPartsToChatContent([]json.RawMessage{raw}, "user")
+	}
 	switch partType {
 	case "input_image", "image_url":
 		imageURL := rawString(part["image_url"])

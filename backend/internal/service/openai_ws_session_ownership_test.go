@@ -594,7 +594,7 @@ func TestOpenAIWSIngress_LifetimeStopsActiveGeneration(t *testing.T) {
 	account.Extra = map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough}
 	server := newOpenAIWSOwnershipServer(t, svc, account, "")
 	client := server.dial(t)
-	defer client.CloseNow()
+	defer func() { _ = client.CloseNow() }()
 	openAIWSOwnershipWrite(t, client, `{"type":"response.create","model":"gpt-5.1","store":false,"input":"keep generating"}`)
 	select {
 	case <-upstream.writes:
@@ -1129,7 +1129,7 @@ func TestOpenAIWSIngress_OwnerStoreFailureNeverForwardsUnverifiedParent(t *testi
 			account.Extra = map[string]any{"openai_apikey_responses_websockets_v2_mode": mode}
 			server := newOpenAIWSOwnershipServerWithAuth(t, svc, account, "", &APIKey{ID: 51, UserID: 41}, false)
 			client := server.dial(t)
-			defer client.CloseNow()
+			defer func() { _ = client.CloseNow() }()
 			openAIWSOwnershipWrite(t, client, `{"type":"response.create","model":"gpt-5.1","store":true,"previous_response_id":"resp_unverified","input":"continue"}`)
 			event := openAIWSOwnershipRead(t, client)
 			require.Equal(t, "response_owner_unavailable", gjson.GetBytes(event, "error.code").String())

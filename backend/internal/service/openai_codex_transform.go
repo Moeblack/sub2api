@@ -86,6 +86,7 @@ type codexOAuthTransformOptions struct {
 	IsCompact                           bool
 	SkipDefaultInstructions             bool
 	PreserveToolCallIDs                 bool
+	PreserveNativeCallIDs               bool
 	OmitPromotedSystemMessagesFromInput bool
 }
 
@@ -325,8 +326,9 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			}
 		}
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
-			PreserveReferences: needsToolContinuation,
-			PreserveCallIDs:    preserveCallIDs,
+			PreserveReferences:    needsToolContinuation,
+			PreserveCallIDs:       preserveCallIDs,
+			PreserveNativeCallIDs: opts.PreserveNativeCallIDs,
 		})
 		reqBody["input"] = input
 		result.Modified = true
@@ -362,6 +364,12 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 	}
 	choiceType := strings.TrimSpace(firstNonEmptyString(choiceMap["type"]))
 	if choiceType == "" {
+		return false
+	}
+	if choiceType == "allowed_tools" {
+		// This is a selection policy, not a declared tool type. Preserve it for
+		// upstream validation (including references to input.additional_tools);
+		// falling back to auto would silently discard the caller's restriction.
 		return false
 	}
 	modified := false
@@ -1399,8 +1407,7 @@ func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
 
 // defaultCodexSynthInstructions 返回合成路径在 instructions 为空时应填入的默认提示词。
 //
-// 按 model 选择真实 Codex CLI 的 base instructions（codex 系→GPT-5-Codex，
-// gpt-5.2→GPT-5.2，gpt-5.1/gpt-5→GPT-5.1），使合成请求在提示词层面贴近真实 Codex 行为；
+// 按 model 选择真实 Codex CLI 的 base instructions，使合成请求在提示词层面贴近真实 Codex 行为；
 // 若内嵌 prompt 意外为空，回退到最小占位符以保证字段非空。
 func defaultCodexSynthInstructions(model string) string {
 	if instructions := strings.TrimSpace(openai.CodexBaseInstructionsForModel(model)); instructions != "" {
@@ -1506,8 +1513,9 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 }
 
 type codexInputFilterOptions struct {
-	PreserveReferences bool
-	PreserveCallIDs    bool
+	PreserveReferences    bool
+	PreserveCallIDs       bool
+	PreserveNativeCallIDs bool
 }
 
 // filterCodexInput 按需过滤 item_reference 与 id。
@@ -1638,6 +1646,11 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
 		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
 		fixCallIDPrefix := func(id string) string {
+			if opts.PreserveNativeCallIDs {
+				// Native call IDs are opaque correlation keys. Hashing even a long
+				// key would detach late results from an earlier recorded response.
+				return id
+			}
 			return normalizeCodexFilterCallID(typ, id, opts.PreserveCallIDs)
 		}
 
@@ -1649,7 +1662,7 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			for key, value := range m {
 				newItem[key] = value
 			}
-			if id, ok := newItem["id"].(string); ok && strings.HasPrefix(strings.TrimSpace(id), "call_") {
+			if id, ok := newItem["id"].(string); ok && !opts.PreserveNativeCallIDs && strings.HasPrefix(strings.TrimSpace(id), "call_") {
 				trimmedID := strings.TrimSpace(id)
 				_, referencesExistingItem := inputItemIDs[trimmedID]
 				if !referencesExistingItem {
@@ -1684,7 +1697,7 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			isServerExecutedResponsesToolSearch(typ, stringField(m, "execution"))
 		if isCodexToolCallItemType(typ) && !standalone {
 			callID, ok := m["call_id"].(string)
-			if !ok || strings.TrimSpace(callID) == "" {
+			if (!ok || strings.TrimSpace(callID) == "") && !opts.PreserveNativeCallIDs {
 				if id, ok := m["id"].(string); ok && strings.TrimSpace(id) != "" {
 					callID = id
 					ensureCopy()

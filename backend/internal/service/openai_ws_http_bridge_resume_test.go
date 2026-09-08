@@ -288,9 +288,9 @@ func TestOpenAIWSHTTPBridgeIncrementalTurnsPreserveCompleteOutputHistory(t *test
 				writeEvent := func(event any) {
 					encoded, err := json.Marshal(event)
 					require.NoError(t, err)
-					stream.WriteString("data: ")
-					stream.Write(encoded)
-					stream.WriteString("\n\n")
+					_, _ = stream.WriteString("data: ")
+					_, _ = stream.Write(encoded)
+					_, _ = stream.WriteString("\n\n")
 				}
 				if delivery.itemEvents {
 					for index, item := range output {

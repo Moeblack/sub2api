@@ -18,7 +18,10 @@ ARG GOSUMDB=sum.golang.google.cn
 FROM ${NODE_IMAGE} AS frontend-builder
 
 WORKDIR /app/frontend
-ENV NODE_OPTIONS=--max-old-space-size=1536
+# The merged frontend's mandatory vue-tsc check exceeds a 1536 MiB V8 heap.
+# Keep it bounded and allow smaller/larger builders to override the budget.
+ARG FRONTEND_NODE_OPTIONS=--max-old-space-size=2304
+ENV NODE_OPTIONS=${FRONTEND_NODE_OPTIONS}
 
 # Install pnpm. Keep this pinned to the lockfile-compatible major version so
 # Docker builds remain reproducible when pnpm changes config validation rules.

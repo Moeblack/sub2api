@@ -370,7 +370,7 @@ func openAIWSStreamID(payload []byte) (string, error) {
 		return "", newOpenAIWSRequestError(400, "invalid_stream_id", "The 'stream_id' field must be a non-empty string with at most 256 characters and may only contain letters, numbers, underscores, hyphens, and periods.", "stream_id")
 	}
 	for _, r := range id {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '.' {
 			return "", newOpenAIWSRequestError(400, "invalid_stream_id", "The 'stream_id' field must be a non-empty string with at most 256 characters and may only contain letters, numbers, underscores, hyphens, and periods.", "stream_id")
 		}
 	}

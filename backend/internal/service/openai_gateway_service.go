@@ -271,19 +271,22 @@ type OpenAIForwardResult struct {
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
 	UpstreamTerminalEvent string
-	ResponseHeaders       http.Header
-	Duration              time.Duration
-	FirstTokenMs          *int
-	ClientDisconnect      bool
-	ImageCount            int
-	ImageSize             string
-	ImageInputSize        string
-	ImageOutputSize       string
-	ImageOutputSizes      []string
-	ImageSizeSource       string
-	ImageSizeBreakdown    map[string]int
-	VideoCount            int
-	VideoResolution       string
+	// UpstreamTerminalReason is the upstream's incomplete_details.reason, not
+	// a client-supplied reason. A steering boundary is not an account failure.
+	UpstreamTerminalReason string
+	ResponseHeaders        http.Header
+	Duration               time.Duration
+	FirstTokenMs           *int
+	ClientDisconnect       bool
+	ImageCount             int
+	ImageSize              string
+	ImageInputSize         string
+	ImageOutputSize        string
+	ImageOutputSizes       []string
+	ImageSizeSource        string
+	ImageSizeBreakdown     map[string]int
+	VideoCount             int
+	VideoResolution        string
 	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
@@ -308,6 +311,11 @@ func (r *OpenAIForwardResult) SucceededForScheduling() bool {
 	switch r.UpstreamTerminalEvent {
 	case "response.completed", "response.done":
 		return true
+	case "response.incomplete":
+		// The server successfully reached the user-requested steering boundary.
+		// Preserve the incomplete event for billing/protocol truth while avoiding
+		// scheduler penalties for normal steering of a healthy account.
+		return r.UpstreamTerminalReason == "steered"
 	default:
 		return false
 	}
@@ -483,7 +491,7 @@ type OpenAIGatewayService struct {
 	openaiWSRetryMetrics                openAIWSRetryMetrics
 	responseHeaderFilter                *responseheaders.CompiledHeaderFilter
 	codexSnapshotThrottle               *accountWriteThrottle
-	codexModelsManifestCache            codexModelsManifestCache
+	openAIModelsCache                   openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，

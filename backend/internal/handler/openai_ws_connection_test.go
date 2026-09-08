@@ -40,6 +40,10 @@ func (u *isolationHTTPUpstream) Do(request *http.Request, _ string, _ int64, _ i
 }
 
 func newIsolationBridgeServer(t *testing.T, upstream http.Handler, configure ...func(*OpenAIGatewayHandler)) (*httptest.Server, <-chan *service.UsageLog, func()) {
+	return newIsolationBridgeServerWithGroup(t, upstream, nil, configure...)
+}
+
+func newIsolationBridgeServerWithGroup(t *testing.T, upstream http.Handler, group *service.Group, configure ...func(*OpenAIGatewayHandler)) (*httptest.Server, <-chan *service.UsageLog, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	origin := httptest.NewServer(upstream)
@@ -81,6 +85,9 @@ func newIsolationBridgeServer(t *testing.T, upstream http.Handler, configure ...
 	}
 	groupID := int64(902)
 	key := &service.APIKey{ID: 903, GroupID: &groupID, User: &service.User{ID: 904, Status: service.StatusActive}, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive}}
+	if group != nil {
+		key.Group = group
+	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyAPIKey), key)
@@ -153,7 +160,12 @@ func TestOpenAIWSHTTPBridgeIndependentSocketsWarmupAndCancellation(t *testing.T)
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_%s\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\"}}\n\n", label)
 		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"started\"}\n\n")
-		w.(http.Flusher).Flush()
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("SSE test server must support flushing")
+			return
+		}
+		flusher.Flush()
 		if label == "A" || label == "C" {
 			var proceed <-chan struct{}
 			if label == "A" {
@@ -223,7 +235,12 @@ func TestOpenAIWSHTTPBridgeShutdownClosesActiveConnection(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_shutdown\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\"}}\n\n")
 		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"started\"}\n\n")
-		w.(http.Flusher).Flush()
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("SSE test server must support flushing")
+			return
+		}
+		flusher.Flush()
 		<-r.Context().Done()
 		close(canceled)
 	}))

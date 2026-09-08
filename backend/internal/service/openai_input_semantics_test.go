@@ -134,7 +134,9 @@ func TestOpenAIInputSemanticsStandaloneMetadataPreserved(t *testing.T) {
 	filtered := filterCodexInput(input, true)
 	require.Len(t, filtered, 1)
 	require.NotContains(t, filtered[0], "call_id")
-	require.Equal(t, "external_notification", filtered[0].(map[string]any)["name"])
+	filteredItem, ok := filtered[0].(map[string]any)
+	require.True(t, ok, "standalone input must remain an object")
+	require.Equal(t, "external_notification", filteredItem["name"])
 	body, err := json.Marshal(request)
 	require.NoError(t, err)
 	for _, keepNamespaces := range []bool{false, true} {
@@ -186,7 +188,9 @@ func TestOpenAIInputSemanticsHostedToolsDoNotUseClientCallIDs(t *testing.T) {
 		item := map[string]any{"type": typ, "id": "ws_opaque", "call_id": "stray_client_id"}
 		filtered := filterCodexInput([]any{item}, true)
 		require.NotContains(t, filtered[0], "call_id", typ)
-		require.Equal(t, "ws_opaque", filtered[0].(map[string]any)["id"], typ)
+		filteredItem, ok := filtered[0].(map[string]any)
+		require.True(t, ok, "%s input must remain an object", typ)
+		require.Equal(t, "ws_opaque", filteredItem["id"], typ)
 		require.Equal(t, "stray_client_id", item["call_id"], "input map was mutated")
 	}
 }
@@ -202,15 +206,22 @@ func TestOpenAIInputSemanticsCompactionPreservesIdentifiers(t *testing.T) {
 			require.False(t, sanitizeOpenAIResponsesOrphanToolOutputs(request, input, false))
 		}
 		applyCodexOAuthTransform(request, false, false)
-		items := request["input"].([]any)
+		items, ok := request["input"].([]any)
+		require.True(t, ok, "compaction history must remain an array")
 		require.Len(t, items, 2)
-		require.Equal(t, "call_opaque", items[1].(map[string]any)["call_id"])
+		output, ok := items[1].(map[string]any)
+		require.True(t, ok, "tool output must remain an object")
+		require.Equal(t, "call_opaque", output["call_id"])
 	}
 	request := map[string]any{"model": "gpt-5.1", "input": []any{
 		map[string]any{"type": "function_call", "call_id": "call_before_compaction", "name": "tool", "arguments": "{}"},
 	}}
 	applyCodexOAuthTransform(request, false, true)
-	require.Equal(t, "call_before_compaction", request["input"].([]any)[0].(map[string]any)["call_id"])
+	items, ok := request["input"].([]any)
+	require.True(t, ok, "tool history must remain an array")
+	call, ok := items[0].(map[string]any)
+	require.True(t, ok, "tool call must remain an object")
+	require.Equal(t, "call_before_compaction", call["call_id"])
 }
 
 func TestOpenAIInputSemanticsNativeAndLegacyPaths(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/testutil/containertest"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -93,7 +94,7 @@ func startRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 	ensureDockerAvailable(t)
 
-	redisContainer, err := tcredis.Run(ctx, redisImageTag)
+	redisContainer, err := tcredis.Run(ctx, redisImageTag, containertest.WithBindAddress("6379/tcp"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = redisContainer.Terminate(ctx)

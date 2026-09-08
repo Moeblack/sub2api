@@ -648,14 +648,19 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		router := gin.New()
 		router.Use(server.Middleware())
 
-		// Request for existing static file
+		// Request the real favicon included by the production frontend build.
+		expectedLogo, err := fs.ReadFile(server.distFS, "logo.svg")
+		require.NoError(t, err)
+		require.Contains(t, string(expectedLogo), "<svg")
+
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 		assert.Empty(t, w.Header().Get("Cache-Control"))
+		assert.Equal(t, expectedLogo, w.Body.Bytes(), "must serve the embedded asset, not the SPA fallback")
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
 		require.NoError(t, err)
@@ -730,16 +735,21 @@ func TestHasEmbeddedFrontend(t *testing.T) {
 func TestServeEmbeddedFrontend(t *testing.T) {
 	t.Run("serves_static_files", func(t *testing.T) {
 		middleware := ServeEmbeddedFrontend()
+		expectedLogo, err := frontendFS.ReadFile("dist/logo.svg")
+		require.NoError(t, err)
+		require.Contains(t, string(expectedLogo), "<svg")
 
 		router := gin.New()
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
+		assert.Empty(t, w.Header().Get("Cache-Control"))
+		assert.Equal(t, expectedLogo, w.Body.Bytes(), "must serve the embedded asset, not the SPA fallback")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {

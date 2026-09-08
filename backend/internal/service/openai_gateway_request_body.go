@@ -704,6 +704,9 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel 
 	if reqBody == nil {
 		return "", false
 	}
+	if effort, updated := openAIReasoningConfigurationEffortFromMap(reqBody); updated {
+		return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
+	}
 
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
@@ -1015,6 +1018,24 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 
 func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
+		return body, false, nil
+	}
+	// GPT-5.6 and Astra expose mode and effort as independent controls.
+	// In particular, pro without effort uses the model default, not max.
+	rawModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	model := canonicalizeOpenAIModelAliasSpelling(rawModel)
+	// The catalog canonicalizer also returns empty for an unknown account
+	// alias; only an actually omitted model uses the legacy fallback.
+	legacyModel := rawModel == ""
+	for _, prefix := range []string{"gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5", "gpt-4", "gpt-4.1", "gpt-4o", "o1", "o3", "o4-mini"} {
+		if model == prefix || strings.HasPrefix(model, prefix+"-") {
+			legacyModel = true
+			break
+		}
+	}
+	// This runs before account model mapping. Unknown aliases and future models
+	// must retain the caller's mode so the selected upstream can validate it.
+	if !legacyModel {
 		return body, false, nil
 	}
 	mode := gjson.GetBytes(body, "reasoning.mode")
@@ -1336,7 +1357,10 @@ func isOpenAICodexModel(model string) bool {
 // 非空候选；body 未携带 effort 时的模型后缀推导依次尝试每个候选——OAuth 的
 // normalizeCodexModel 会剥掉 upstreamModel 的 effort 后缀，只有原始模型名还留着。
 func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string) *string {
-	reasoningEffort := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	reasoningEffort, updated := openAIReasoningConfigurationEffort(body)
+	if !updated {
+		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
+	}
 	if reasoningEffort == "" {
 		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
@@ -1356,6 +1380,9 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 }
 
 func explicitRequestedReasoningEffortFromBody(body []byte) string {
+	if raw, updated := openAIReasoningConfigurationEffort(body); updated {
+		return raw
+	}
 	raw := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String())
 	if raw == "" {
 		raw = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
@@ -2114,8 +2141,8 @@ func CanonicalRequestedReasoningEffortFromReqBody(reqBody map[string]any, modelC
 	if reqBody == nil {
 		return CanonicalRequestedReasoningEffort(nil, modelCandidates...)
 	}
-	raw := ""
-	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
+	raw, updated := openAIReasoningConfigurationEffortFromMap(reqBody)
+	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok && !updated {
 		if effort, ok := reasoning["effort"].(string); ok {
 			raw = strings.TrimSpace(effort)
 		}
