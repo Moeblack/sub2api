@@ -66,6 +66,7 @@ type AnthropicContentBlock struct {
 	// Signature carries provider encrypted reasoning (e.g. xAI encrypted_content)
 	// so multi-turn Claude clients can round-trip it back on subsequent turns.
 	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking
 
 	// type=image
 	Source *AnthropicImageSource `json:"source,omitempty"`
@@ -739,6 +740,7 @@ type ChatMessage struct {
 
 // ChatContentPart is a typed content part in a multi-modal message.
 type ChatContentPart struct {
+
 	Type                  string          `json:"type"` // "text" | "image_url" | "file"
 	Text                  string          `json:"text,omitempty"`
 	ImageURL              *ChatImageURL   `json:"image_url,omitempty"`
