@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -67,6 +69,48 @@ func TestOpenAIResponsesWebSocket_CompositeAlias(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestOpenAIResponsesWebSocket_CompositeBridgeAliasSwitch(t *testing.T) {
+	routes := &compositeWSRouteRepo{routes: []service.CompositeModelRoute{
+		{GroupID: 4201, PublicModel: "public-alias", MatchType: service.CompositeRouteMatchExact, TargetPlatform: service.PlatformGrok, Endpoint: service.CompositeRouteEndpointResponses, UpstreamModel: "grok-4.3", Enabled: true},
+		{GroupID: 4201, PublicModel: "second-alias", MatchType: service.CompositeRouteMatchExact, TargetPlatform: service.PlatformGrok, Endpoint: service.CompositeRouteEndpointResponses, UpstreamModel: "grok-4.6", Enabled: true},
+	}}
+	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+		firstPayload:      `{"type":"response.create","model":"public-alias","input":"hi"}`,
+		secondPayload:     `{"type":"response.create","model":"second-alias","input":"again"}`,
+		group:             compositeWSGroup("public-alias", "second-alias"),
+		accountPlatform:   service.PlatformGrok,
+		compositeResolver: service.NewCompositeRouteResolver(routes),
+	})
+	require.Len(t, got.upstreamPayloads, 2)
+	for i, upstream := range []string{"grok-4.3", "grok-4.6"} {
+		public := []string{"public-alias", "second-alias"}[i]
+		require.Equal(t, upstream, gjson.GetBytes(got.upstreamPayloads[i], "model").String())
+		require.Equal(t, public, gjson.GetBytes(got.clientEvents[i], "response.model").String())
+		require.Equal(t, public, got.logs[i].RequestedModel)
+		require.NotNil(t, got.logs[i].UpstreamModel)
+		require.Equal(t, upstream, *got.logs[i].UpstreamModel)
+	}
+}
+
+func TestResolveOpenAIWSCompositeRouteClearsPreviousDecision(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	h := &OpenAIGatewayHandler{compositeResolver: compositeWSResolver(service.PlatformGrok, service.CompositeRouteEndpointResponses, "grok-4.3")}
+	key := &service.APIKey{Group: compositeWSGroup()}
+	key.Group.ID = 4201
+	require.NoError(t, h.resolveOpenAIWSCompositeRoute(c, key, "public-alias"))
+	upstream, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context())
+	require.True(t, ok)
+	require.Equal(t, "grok-4.3", upstream)
+	require.NoError(t, h.resolveOpenAIWSCompositeRoute(c, key, "unknown-alias"))
+	_, ok = service.ResolvedUpstreamModelFromContext(c.Request.Context())
+	require.False(t, ok)
+	_, ok = service.ResolvedTargetPlatformFromContext(c.Request.Context())
+	require.False(t, ok)
+	_, ok = service.RequestedPublicModelFromContext(c.Request.Context())
+	require.False(t, ok)
 }
 
 func TestOpenAIResponsesWebSocket_CompositeRouteRejections(t *testing.T) {

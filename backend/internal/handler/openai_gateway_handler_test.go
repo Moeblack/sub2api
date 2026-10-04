@@ -2029,12 +2029,11 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
-	simpleModeRejectAtRead int64
-	compositeResolver      *service.CompositeRouteResolver
-	accountPlatform        string
-	closeReason            string
-	closeStatus            coderws.StatusCode
-	firstPayload           string
+	compositeResolver *service.CompositeRouteResolver
+	accountPlatform   string
+	closeReason       string
+	closeStatus       coderws.StatusCode
+	firstPayload      string
 	// midPayload 在首个 turn 完成后发送（如 session.update），上游桩会为它
 	// 回一个 response.completed，客户端按普通事件读取。
 	midPayload                string
@@ -3390,7 +3389,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		_, event, readErr := clientConn.Read(readCtx)
 		cancelRead()
 		require.NoError(t, readErr)
-		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String(), "unexpected websocket event: %s", event)
 		clientEvents = append(clientEvents, append([]byte(nil), event...))
 	}
 	readCompleted()

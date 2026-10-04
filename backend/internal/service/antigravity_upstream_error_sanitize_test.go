@@ -53,11 +53,6 @@ func TestBuildAntigravityClientErrorBody_NonJSONBody(t *testing.T) {
 func TestAntigravityMappedErrorsScrubPoolIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const upstreamMessage = "Invalid request for projects/private-pool-123; consumer: 987654321; caller pool-sa@private-pool.iam.gserviceaccount.com"
-	body, err := json.Marshal(map[string]any{"error": map[string]any{
-		"message": upstreamMessage,
-		"details": []any{map[string]any{"project": "private-pool-123"}},
-	}})
-	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name           string
@@ -67,6 +62,8 @@ func TestAntigravityMappedErrorsScrubPoolIdentity(t *testing.T) {
 		wantType       string
 		passthrough    bool
 		customMessage  bool
+		allowlisted    bool
+		disabledRule   bool
 	}{
 		{name: "chat bad request", upstreamStatus: 400, wantStatus: 400, wantType: "upstream_error"},
 		{name: "responses forbidden", upstreamStatus: 403, wantStatus: 403, wantType: "upstream_error"},
@@ -80,13 +77,26 @@ func TestAntigravityMappedErrorsScrubPoolIdentity(t *testing.T) {
 		{name: "claude server failure", claude: true, upstreamStatus: 500, wantStatus: 502, wantType: "upstream_error"},
 		{name: "claude passthrough body", claude: true, upstreamStatus: 400, wantStatus: 418, wantType: "upstream_error", passthrough: true},
 		{name: "claude custom rule message", claude: true, upstreamStatus: 400, wantStatus: 418, wantType: "upstream_error", passthrough: true, customMessage: true},
+		{name: "compat allowlisted message", upstreamStatus: 400, wantStatus: 400, wantType: "upstream_error", allowlisted: true},
+		{name: "claude allowlisted message", claude: true, upstreamStatus: 400, wantStatus: 400, wantType: "invalid_request_error", allowlisted: true},
+		{name: "claude disabled rule", claude: true, upstreamStatus: 400, wantStatus: 400, wantType: "invalid_request_error", passthrough: true, disabledRule: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
+			message := upstreamMessage
+			if tc.allowlisted {
+				message = "prompt is too long: " + message
+			}
+			body, err := json.Marshal(map[string]any{"error": map[string]any{
+				"message": message,
+				"details": []any{map[string]any{"project": "private-pool-123"}},
+			}})
+			require.NoError(t, err)
 			if tc.passthrough {
 				rule := newNonFailoverPassthroughRule(tc.upstreamStatus, "Invalid request", tc.wantStatus, upstreamMessage)
 				rule.PassthroughBody = !tc.customMessage
+				rule.Enabled = !tc.disabledRule
 				rules := &ErrorPassthroughService{}
 				rules.setLocalCache([]*model.ErrorPassthroughRule{rule})
 				BindErrorPassthroughService(c, rules)
@@ -121,9 +131,22 @@ func TestAntigravityMappedErrorsScrubPoolIdentity(t *testing.T) {
 				require.Contains(t, errorBody, "code")
 				require.Nil(t, errorBody["code"])
 			}
-			if !tc.claude || tc.upstreamStatus == 400 {
+			if tc.allowlisted || (tc.passthrough && !tc.disabledRule) {
 				require.Contains(t, errorBody["message"], "Invalid request")
 				require.Contains(t, errorBody["message"], "projects/***")
+			} else {
+				wantMessage := "Upstream request failed"
+				if tc.claude {
+					wantMessage = map[int]string{
+						400: "Invalid request",
+						401: "Upstream authentication failed",
+						403: "Upstream access forbidden",
+						429: "Upstream rate limit exceeded",
+						529: "Upstream service overloaded",
+						500: "Upstream request failed",
+					}[tc.upstreamStatus]
+				}
+				require.Equal(t, wantMessage, errorBody["message"])
 			}
 		})
 	}

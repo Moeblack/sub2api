@@ -139,6 +139,9 @@ func (h *OpenAIGatewayHandler) runOpenAIWSHTTPConnection(c, base *gin.Context, c
 				if denied := validateOpenAIWSModelAllowlist(execution, apiKey.Group, request.RawPayload, request.Payload); denied != nil {
 					return denied
 				}
+				if err := h.resolveOpenAIWSCompositeRoute(execution, apiKey, gjson.GetBytes(request.Payload, "model").String()); err != nil {
+					return err
+				}
 			}
 			execution.Request.Method = http.MethodPost
 			execution.Request.Body = io.NopCloser(bytes.NewReader(request.Payload))
@@ -203,6 +206,25 @@ func validateOpenAIWSModelAllowlist(c *gin.Context, group *service.Group, payloa
 	return nil
 }
 
+func (h *OpenAIGatewayHandler) resolveOpenAIWSCompositeRoute(c *gin.Context, apiKey *service.APIKey, model string) error {
+	if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformComposite {
+		return nil
+	}
+	ctx := c.Request.Context()
+	for _, key := range []ctxkey.Key{ctxkey.ResolvedTargetPlatform, ctxkey.ResolvedUpstreamModel, ctxkey.RequestedPublicModel, ctxkey.CompositeRouteSource} {
+		ctx = context.WithValue(ctx, key, "")
+	}
+	c.Request = c.Request.WithContext(ctx)
+	decision, err := h.compositeResolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, service.CompositeRouteEndpointResponses)
+	if err != nil {
+		return &service.OpenAIWSRequestError{Status: http.StatusInternalServerError, Code: "server_error", Message: "Failed to resolve composite model route"}
+	}
+	if decision.Matched {
+		c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), decision))
+	}
+	return nil
+}
+
 // Warmup performs admission checks, including the existing request-rate gate,
 // but never selects an account, invokes moderation inference, or records usage.
 func (h *OpenAIGatewayHandler) validateOpenAIWSWarmup(c *gin.Context, payload []byte) error {
@@ -217,6 +239,9 @@ func (h *OpenAIGatewayHandler) validateOpenAIWSWarmup(c *gin.Context, payload []
 		return denied
 	}
 	model := gjson.GetBytes(payload, "model").String()
+	if err := h.resolveOpenAIWSCompositeRoute(c, apiKey, model); err != nil {
+		return err
+	}
 	ensureCompositeTargetPlatform(c, apiKey, model)
 	if !openAICompatibleTextTargetAllowed(c, apiKey, model) {
 		return &service.OpenAIWSRequestError{Status: 400, Code: "model_not_supported", Message: "Model is not supported by this endpoint", Param: "model"}
