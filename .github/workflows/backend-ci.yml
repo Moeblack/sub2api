@@ -95,6 +95,8 @@ jobs:
     if: ${{ inputs.prepare_release }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CGO_ENABLED: '0'
     permissions:
       contents: write
       packages: write
@@ -154,7 +156,7 @@ jobs:
       - name: Build release binary
         working-directory: backend
         run: |
-          CGO_ENABLED=0 go build -tags embed -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildType=release" -o ../dist/sub2api ./cmd/server
+          go build -tags embed -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildType=release" -o ../dist/sub2api ./cmd/server
           ../dist/sub2api -version 2>&1 | tee ../dist/version.txt
           grep -F "$GITHUB_SHA" ../dist/version.txt
           grep -F "Sub2API $VERSION" ../dist/version.txt
