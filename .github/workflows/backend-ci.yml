@@ -4,12 +4,18 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      prepare_release:
+        description: 'Validate changed regressions and prepare a Linux amd64 draft update'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   shell:
+    if: ${{ !inputs.prepare_release }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
@@ -23,6 +29,7 @@ jobs:
           /bin/sh deploy/test-caddyfile-cache.sh
 
   test:
+    if: ${{ !inputs.prepare_release }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -43,6 +50,7 @@ jobs:
         run: make test-integration
 
   frontend:
+    if: ${{ !inputs.prepare_release }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -63,6 +71,7 @@ jobs:
         run: make test-frontend
 
   golangci-lint:
+    if: ${{ !inputs.prepare_release }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -81,3 +90,102 @@ jobs:
           version: v2.13
           args: --timeout=30m
           working-directory: backend
+
+  prepare-release:
+    if: ${{ inputs.prepare_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Resolve release metadata
+        run: |
+          VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Check formatting of changed Go files
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=ACM 588931bef "$GITHUB_SHA" -- '*.go')
+          unformatted=$(gofmt -l "${files[@]}")
+          if [ -n "$unformatted" ]; then printf '%s\n' "$unformatted"; exit 1; fi
+      - name: Run changed regression tests
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, subprocess
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=ACM', '588931bef', 'HEAD', '--', 'backend/**/*_test.go'], text=True).splitlines()
+          packages, names = set(), set()
+          for name in changed:
+              path = pathlib.Path(name)
+              text = path.read_text()
+              if re.search(r'^//go:build integration\s*$', text, re.M):
+                  continue
+              tests = re.findall(r'^func (Test\w+)\(t \*testing\.T\)', text, re.M)
+              if tests:
+                  packages.add('./' + path.parent.relative_to('backend').as_posix())
+                  names.update(tests)
+          if not packages or not names:
+              raise SystemExit('No regression tests selected')
+          print(f'Running {len(names)} tests across {len(packages)} packages', flush=True)
+          subprocess.run(['go', 'test', '-tags=unit', '-count=1', '-timeout=10m', '-run', '^(' + '|'.join(sorted(names)) + ')$', *sorted(packages)], cwd='backend', check=True)
+          PY
+      - name: Verify billing settlement against isolated PostgreSQL
+        working-directory: backend
+        run: go test -tags=integration -count=1 -timeout=5m ./internal/repository -run '^TestUsageBillingRepositoryApply_'
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile && pnpm run build
+      - name: Build release binary
+        working-directory: backend
+        run: |
+          CGO_ENABLED=0 go build -tags embed -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.Commit=$GITHUB_SHA -X main.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildType=release" -o ../dist/sub2api ./cmd/server
+          ../dist/sub2api -version 2>&1 | tee ../dist/version.txt
+          grep -F "$GITHUB_SHA" ../dist/version.txt
+          grep -F "Sub2API $VERSION" ../dist/version.txt
+      - name: Package update and verify checksum
+        run: |
+          cp LICENSE dist/
+          tar -czf "dist/sub2api_${VERSION}_linux_amd64.tar.gz" -C dist sub2api LICENSE
+          cd dist
+          sha256sum "sub2api_${VERSION}_linux_amd64.tar.gz" > checksums.txt
+          sha256sum -c checksums.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-amd64-update
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/version.txt
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare persistent Docker image without deployment
+        run: |
+          cp dist/sub2api sub2api
+          docker build -f Dockerfile.goreleaser --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$IMAGE" .
+          docker run --rm --entrypoint /app/sub2api "$IMAGE" -version
+          docker run --rm --user 1000:1000 --entrypoint sh "$IMAGE" -c 'test -w /app && test -x /app/sub2api'
+          docker push "$IMAGE"
+      - name: Create draft release for final verification
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --title "Sub2API $VERSION (Moeblack fork)" --notes "Targeted model, routing, security and billing backports. Awaiting final artifact verification before publication." "dist/sub2api_${VERSION}_linux_amd64.tar.gz" dist/checksums.txt
