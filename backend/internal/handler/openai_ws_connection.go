@@ -150,7 +150,22 @@ func (h *OpenAIGatewayHandler) runOpenAIWSHTTPConnection(c, base *gin.Context, c
 			execution.Request.Header.Del("Connection")
 			execution.Request.Header.Del("Content-Length")
 			execution.Request.Header.Set("Content-Type", "application/json")
-			writer := newOpenAIWSHTTPResponseWriter(ctx, emit, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
+			clientEmit := emit
+			if publicModel, ok := service.RequestedPublicModelFromContext(execution.Request.Context()); ok {
+				clientEmit = func(payload []byte) error {
+					for _, path := range []string{"model", "response.model"} {
+						if model := gjson.GetBytes(payload, path); model.Type == gjson.String {
+							var err error
+							payload, err = sjson.SetBytes(payload, path, publicModel)
+							if err != nil {
+								return err
+							}
+						}
+					}
+					return emit(payload)
+				}
+			}
+			writer := newOpenAIWSHTTPResponseWriter(ctx, clientEmit, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
 			execution.Writer = writer
 			defer writer.stop()
 			service.BeginOpsStreamTurn(execution, request.Sequence)
