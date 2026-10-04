@@ -493,7 +493,7 @@ func (s *AntigravityGatewayService) writeMappedAntigravityCompatError(
 	body []byte,
 ) error {
 	MarkResponseCommitted(c)
-	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(body)))
+	message := sanitizeAntigravityErrorText(strings.TrimSpace(extractAntigravityErrorMessage(body)))
 	setOpsUpstreamError(c, upstreamStatus, message, s.getUpstreamErrorDetail(body))
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		ProxyID:            opsUpstreamProxyID(account),

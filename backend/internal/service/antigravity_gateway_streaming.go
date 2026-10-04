@@ -690,7 +690,7 @@ func (s *AntigravityGatewayService) WriteMappedClaudeError(c *gin.Context, accou
 func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte) error {
 	MarkResponseCommitted(c)
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
-	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	upstreamMsg = sanitizeAntigravityErrorText(upstreamMsg)
 	logBody, maxBytes := s.getLogConfig()
 	upstreamDetail := s.getUpstreamErrorDetail(body)
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
@@ -719,7 +719,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 	); matched {
 		c.JSON(ptStatus, gin.H{
 			"type":  "error",
-			"error": gin.H{"type": ptErrType, "message": ptErrMsg},
+			"error": gin.H{"type": ptErrType, "message": sanitizeAntigravityErrorText(ptErrMsg)},
 		})
 		if upstreamMsg == "" {
 			return fmt.Errorf("upstream error: %d", upstreamStatus)
