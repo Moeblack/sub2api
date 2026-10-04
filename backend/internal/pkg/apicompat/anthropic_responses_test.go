@@ -1919,3 +1919,27 @@ func TestGPT61SolCacheOptionsAndBreakpointsSurviveChatBridge(t *testing.T) {
 		require.Contains(t, string(out.Input), "prompt_cache_breakpoint")
 	}
 }
+
+func TestGPT61SolAnthropicEffortPreservesForkSemantics(t *testing.T) {
+	for _, model := range []string{"gpt-5.5", "gpt-6-sol", "gpt-6.1-sol"} {
+		t.Run(model, func(t *testing.T) {
+			req := &AnthropicRequest{Model: model, OutputConfig: &AnthropicOutputConfig{Effort: "max"}}
+			out, err := AnthropicToResponses(req)
+			require.NoError(t, err)
+			want := "xhigh"
+			if model == "gpt-6.1-sol" {
+				want = "max"
+			}
+			require.Equal(t, want, out.Reasoning.Effort)
+			require.Equal(t, "auto", out.Reasoning.Summary)
+			req.Thinking = &AnthropicThinking{Type: "disabled"}
+			out, err = AnthropicToResponses(req)
+			if model == "gpt-6.1-sol" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, want, out.Reasoning.Effort)
+			}
+		})
+	}
+}
