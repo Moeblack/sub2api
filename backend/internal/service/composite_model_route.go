@@ -32,6 +32,9 @@ type CompositeModelOwnership struct {
 	TargetPlatform string
 	Matched        bool
 	Ambiguous      bool
+	// OpenAIGatewayOAuthClaimed marks credentials that cannot use the default
+	// Anthropic gateway when cross-provider ownership remains unresolved.
+	OpenAIGatewayOAuthClaimed bool
 }
 
 type CompositeModelOwnershipResolver func(context.Context, int64, string) (CompositeModelOwnership, error)

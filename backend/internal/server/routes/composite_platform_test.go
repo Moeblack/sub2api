@@ -185,6 +185,46 @@ func TestCompositeTargetPlatformMiddlewareRewritesNestedLiveModel(t *testing.T) 
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
 
+func TestCompositeTargetPlatformMiddlewareRejectsOAuthAmbiguityLocally(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, claimed := range []bool{false, true} {
+		for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/responses"} {
+			resolver := service.NewCompositeRouteResolver(nil)
+			resolver.SetModelOwnershipResolver(func(context.Context, int64, string) (service.CompositeModelOwnership, error) {
+				return service.CompositeModelOwnership{Ambiguous: true, OpenAIGatewayOAuthClaimed: claimed}, nil
+			})
+			router := gin.New()
+			router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+				groupID := int64(7)
+				c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+					GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformComposite},
+				})
+				c.Next()
+			})))
+			router.Use(compositeTargetPlatformMiddleware(resolver))
+			forwarded := false
+			router.POST(path, func(c *gin.Context) {
+				forwarded = true
+				_, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+				require.False(t, resolved)
+				c.Status(http.StatusNoContent)
+			})
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-custom-private","messages":[]}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if claimed {
+				require.False(t, forwarded, "ambiguous OAuth must not reach an upstream handler")
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+				require.Contains(t, rec.Body.String(), "configure an explicit composite route")
+			} else {
+				require.True(t, forwarded, "API key multi-protocol ambiguity retains existing behavior")
+				require.Equal(t, http.StatusNoContent, rec.Code)
+			}
+		}
+	}
+}
+
 func TestCompositeRequestModelFromMultipartLiveSession(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)

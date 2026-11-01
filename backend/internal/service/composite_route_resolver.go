@@ -7,6 +7,19 @@ import (
 	"strings"
 )
 
+const (
+	CompositeRouteReasonAmbiguous      = "model is exposed by multiple provider platforms"
+	CompositeRouteReasonOAuthAmbiguous = "model is exposed by multiple provider platforms including OAuth accounts"
+)
+
+func (d CompositeRouteDecision) OAuthAmbiguous() bool {
+	return !d.Matched && d.Reason == CompositeRouteReasonOAuthAmbiguous
+}
+
+func (d CompositeRouteDecision) AmbiguousMessage() string {
+	return fmt.Sprintf("Model %q is mapped on multiple provider platforms in this group; configure an explicit composite route", d.PublicModel)
+}
+
 type CompositeRouteResolver struct {
 	repo                   CompositeModelRouteRepository
 	modelOwnershipResolver CompositeModelOwnershipResolver
@@ -67,7 +80,10 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 				return decision, fmt.Errorf("resolve account model ownership: %w", err)
 			}
 		} else if ownership.Ambiguous {
-			decision.Reason = "model is exposed by multiple provider platforms"
+			decision.Reason = CompositeRouteReasonAmbiguous
+			if guessed, ok := DetectModelPlatform(model); ok && ownership.OpenAIGatewayOAuthClaimed && (&Account{Platform: guessed}).IsOpenAICompatible() {
+				decision.Reason = CompositeRouteReasonOAuthAmbiguous
+			}
 			return decision, nil
 		} else if ownership.Matched {
 			platform := strings.TrimSpace(ownership.TargetPlatform)
