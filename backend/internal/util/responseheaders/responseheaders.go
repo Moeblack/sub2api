@@ -118,3 +118,24 @@ func WriteFilteredHeaders(dst http.Header, src http.Header, filter *CompiledHead
 		}
 	}
 }
+
+// WriteClaudeCodeResponseHeaders forwards only retry/rate-limit signals, never
+// arbitrary anthropic-* response metadata (which may identify the account).
+func WriteClaudeCodeResponseHeaders(dst, src http.Header, filter *CompiledHeaderFilter) {
+	if filter == nil {
+		filter = defaultCompiledHeaderFilter
+	}
+	for key, values := range src {
+		lower := strings.ToLower(key)
+		if lower != "x-should-retry" && !strings.HasPrefix(lower, "anthropic-ratelimit-unified-") {
+			continue
+		}
+		if _, blocked := filter.forceRemove[lower]; blocked {
+			continue
+		}
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}

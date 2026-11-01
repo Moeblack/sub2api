@@ -292,6 +292,13 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	}, nil
 }
 
+// Native feature headers accompany opaque protocol fields. Credentials and
+// unrelated headers still use the existing allowlist and credential replacement.
+func forwardableAnthropicPassthroughHeader(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return allowedHeaders[lower] || strings.HasPrefix(lower, "anthropic-") || strings.HasPrefix(lower, "x-claude-code-")
+}
+
 func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -320,9 +327,18 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if c != nil && c.Request != nil {
 		clientBeta = getHeaderRaw(c.Request.Header, "anthropic-beta")
 	}
+	policy := s.evaluateBetaPolicy(ctx, clientBeta, account, gjson.GetBytes(body, "model").String())
+	if policy.blockErr != nil {
+		return nil, nil, policy.blockErr
+	}
+	drop := mergeDropSets(policy.filterSet, s.getBetaPolicyFilterSet(ctx, c, account, gjson.GetBytes(body, "model").String()))
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值：净化以覆写值为准
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
+	}
+	clientBeta = stripBetaTokensWithSet(clientBeta, drop)
+	if err := validateAnthropicSafetyCapabilities(body, clientBeta); err != nil {
+		return nil, nil, err
 	}
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
 		body = sanitized
@@ -339,8 +355,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 
 	if c != nil && c.Request != nil {
 		for key, values := range c.Request.Header {
-			lowerKey := strings.ToLower(strings.TrimSpace(key))
-			if !allowedHeaders[lowerKey] {
+			if !forwardableAnthropicPassthroughHeader(key) {
 				continue
 			}
 			wireKey := resolveWireCasing(key)
@@ -368,6 +383,10 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	deleteHeaderAllForms(req.Header, "anthropic-beta")
+	if clientBeta != "" {
+		setHeaderRaw(req.Header, "anthropic-beta", clientBeta)
+	}
 
 	return req, body, nil
 }
@@ -908,6 +927,7 @@ func writeAnthropicPassthroughResponseHeaders(dst http.Header, src http.Header, 
 	if dst == nil || src == nil {
 		return
 	}
+	defer responseheaders.WriteClaudeCodeResponseHeaders(dst, src, filter)
 	if filter != nil {
 		responseheaders.WriteFilteredHeaders(dst, src, filter)
 		return

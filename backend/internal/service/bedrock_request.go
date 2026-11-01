@@ -198,6 +198,9 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 	var err error
 
 	betaTokens = filterBedrockBetaTokens(betaTokens)
+	if err := validateAnthropicSafetyCapabilities(body, strings.Join(betaTokens, ",")); err != nil {
+		return nil, err
+	}
 	body = sanitizeBedrockFieldsForBetaTokens(body, betaTokens)
 
 	// 注入 anthropic_version（Bedrock 要求）

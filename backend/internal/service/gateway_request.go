@@ -984,6 +984,10 @@ func sanitizeAnthropicBodyForBetaTokens(body []byte, anthropicBetaHeader string)
 		body, changed = b, true
 	}
 
+	if b, deleted := stripAnthropicMessageOutputConfigUnlessBeta(body, anthropicBetaHeader); deleted {
+		body, changed = b, true
+	}
+
 	return body, changed
 }
 
@@ -1024,6 +1028,88 @@ func anthropicBetaTokensContains(header, token string) bool {
 		}
 	}
 	return false
+}
+
+// Safeguards are opaque server-side safety checks, not an optional cosmetic
+// field. Never strip or interpret their evolving schema, and never synthesize
+// a local allow decision. Call this against the final backend capability set.
+func validateAnthropicSafetyCapabilities(body []byte, finalBeta string) error {
+	if gjson.GetBytes(body, "safeguards").Exists() &&
+		!anthropicBetaTokensContains(finalBeta, claude.BetaDangerousToolUse) {
+		return &BetaBlockedError{Message: "safeguards requires dangerous-tool-use-2026-09-03 in the final backend beta capabilities; request rejected without removing safety checks"}
+	}
+	return nil
+}
+
+// Only message-level output_config depends on this beta. Remove empty system
+// control messages, but preserve user/assistant messages and unknown payloads.
+func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, beta string) ([]byte, bool) {
+	if anthropicBetaTokensContains(beta, claude.BetaMidConversationOutputConfig) {
+		return body, false
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() || !gjson.ValidBytes(body) {
+		return body, false
+	}
+	out := body
+	changed := false
+	items := messages.Array()
+	// Reverse traversal keeps array indices stable when removing control messages.
+	for i := len(items) - 1; i >= 0; i-- {
+		msg := items[i]
+		if !msg.Get("output_config").Exists() {
+			continue
+		}
+		path := fmt.Sprintf("messages.%d.output_config", i)
+		if msg.Get("role").String() == "system" && !anthropicMessageContentHasBody(msg.Get("content")) {
+			onlyControlFields := true
+			msg.ForEach(func(key, _ gjson.Result) bool {
+				switch key.String() {
+				case "role", "content", "output_config":
+				default:
+					onlyControlFields = false
+				}
+				return true
+			})
+			if onlyControlFields {
+				path = fmt.Sprintf("messages.%d", i)
+			}
+		}
+		if next, err := sjson.DeleteBytes(out, path); err == nil {
+			out, changed = next, true
+		}
+	}
+	return out, changed
+}
+
+func anthropicMessageContentHasBody(content gjson.Result) bool {
+	switch {
+	case content.Type == gjson.Null:
+		return false
+	case content.Type == gjson.String:
+		return content.String() != ""
+	case content.IsArray():
+		for _, block := range content.Array() {
+			if !block.IsObject() || block.Get("type").String() != "text" ||
+				block.Get("text").Type != gjson.String || block.Get("text").String() != "" {
+				return true
+			}
+			// Do not erase unknown fields embedded in an otherwise empty block.
+			unknown := false
+			block.ForEach(func(key, _ gjson.Result) bool {
+				if key.String() != "type" && key.String() != "text" {
+					unknown = true
+				}
+				return true
+			})
+			if unknown {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
 }
 
 // FilterSignatureSensitiveBlocksForRetry is a stronger retry filter for cases where upstream errors indicate
