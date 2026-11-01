@@ -76,8 +76,8 @@ func TestProtocolCacheCountTokensOutboundLimitAndTTL(t *testing.T) {
 		body := []byte(`{"model":"claude-sonnet-4-6","system":[{"type":"text","text":"stable prefix","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"probe","input_schema":{"type":"object"}}],"messages":[` + messages + `]}`)
 		upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusOK,
-			Header: http.Header{"Content-Type": []string{"application/json"}},
-			Body: io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
 		}}
 		svc := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
 		account := &Account{ID: 401, Platform: PlatformAnthropic, Type: AccountTypeSetupToken, Concurrency: 1,

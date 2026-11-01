@@ -176,7 +176,7 @@ func TestProtocolFidelityOverrideCannotUndoPolicyDrop(t *testing.T) {
 			c.Set(betaPolicyFilterSetKey, map[string]struct{}{claude.BetaDangerousToolUse: {}})
 			account := &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{
 				credKeyHeaderOverrideEnabled: true,
-				credKeyHeaderOverrides: map[string]any{"anthropic-beta": claude.BetaDangerousToolUse},
+				credKeyHeaderOverrides:       map[string]any{"anthropic-beta": claude.BetaDangerousToolUse},
 			}}
 			for _, safety := range []bool{false, true} {
 				body := []byte(`{"model":"custom-model","messages":[]}`)
@@ -245,10 +245,10 @@ func TestProtocolFidelityAPIKeyFeatureAndAgentHeaders(t *testing.T) {
 
 func TestProtocolFidelitySafeResponseHeaders(t *testing.T) {
 	src := http.Header{
-		"X-Should-Retry": []string{"false"},
+		"X-Should-Retry":                     []string{"false"},
 		"Anthropic-Ratelimit-Unified-Status": []string{"allowed"},
-		"Anthropic-Organization-Id": []string{"private-org"},
-		"Set-Cookie": []string{"private-cookie"},
+		"Anthropic-Organization-Id":          []string{"private-org"},
+		"Set-Cookie":                         []string{"private-cookie"},
 	}
 	for _, filter := range []*responseheaders.CompiledHeaderFilter{nil, responseheaders.CompileHeaderFilter(config.ResponseHeaderConfig{})} {
 		dst := http.Header{}
@@ -307,8 +307,8 @@ func TestProtocolFidelitySafeguardResultsAreOpaque(t *testing.T) {
 	response := `{"id":"msg_1","type":"message","safeguard_results":{"toolu_1":{"decision":"deny","unknown":42}},"content":[{"type":"tool_use","id":"toolu_1","name":"probe","input":{}}],"usage":{"input_tokens":12,"output_tokens":7}}`
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header: http.Header{"Content-Type": []string{"application/json"}},
-		Body: io.NopCloser(strings.NewReader(response)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(response)),
 	}}
 	svc := &GatewayService{cfg: &config.Config{}, httpUpstream: upstream, rateLimitService: &RateLimitService{}}
 	_, err := svc.forwardAnthropicAPIKeyPassthrough(context.Background(), c, newAnthropicAPIKeyAccountForTest(), body,
