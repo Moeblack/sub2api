@@ -1026,7 +1026,13 @@ func (s *SettingService) GetClaudeOAuthSystemPromptInjectionSettings(ctx context
 // singleflight 防止缓存过期时 thundering herd
 // 返回空字符串表示不做对应方向的版本检查
 func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, max string) {
-	if cached, ok := versionBoundsCache.Load().(*cachedVersionBounds); ok {
+	if s == nil || s.settingRepo == nil {
+		return "", ""
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cached, ok := versionBoundsCache.Load().(*cachedVersionBounds); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return cached.min, cached.max
 		}
@@ -1035,7 +1041,7 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 	type bounds struct{ min, max string }
 	result, err, _ := versionBoundsSF.Do("version_bounds", func() (any, error) {
 		// 二次检查，避免排队的 goroutine 重复查询
-		if cached, ok := versionBoundsCache.Load().(*cachedVersionBounds); ok {
+		if cached, ok := versionBoundsCache.Load().(*cachedVersionBounds); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return bounds{cached.min, cached.max}, nil
 			}

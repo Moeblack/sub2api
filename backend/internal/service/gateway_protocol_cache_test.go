@@ -114,7 +114,7 @@ func TestProtocolSafetyCountTokensRejectsLocally(t *testing.T) {
 		if passthrough {
 			account.Type = AccountTypeAPIKey
 			account.Credentials = map[string]any{"api_key": "test-key"}
-			err = svc.forwardCountTokensAnthropicAPIKeyPassthrough(context.Background(), c, account, body)
+			err = svc.forwardCountTokensAnthropicAPIKeyPassthrough(context.Background(), c, account, body, "claude-sonnet-4-6")
 		} else {
 			err = svc.ForwardCountTokens(context.Background(), c, account, &ParsedRequest{Body: NewRequestBodyRef(body), Model: "claude-sonnet-4-6"})
 		}

@@ -473,6 +473,12 @@ gateway:
   # Stream data interval timeout (seconds), 0=disable
   # 流数据间隔超时（秒），0=禁用
   stream_data_interval_timeout: 180
+  # Maximum upstream read-wait without semantic text/thinking/tool progress (seconds).
+  # Ping/comments/empty deltas do not reset it; downstream backpressure pauses it.
+  # Default 600; 0 disables, otherwise 30-3600. Separate from transport idle above.
+  # 无文本/思考/工具语义进展的上游读取等待上限；心跳不续期，下游背压不计时。
+  # 默认 600 秒，0 禁用，否则范围 30-3600；不改变独立图片流或 WebSocket/ctx_pool 超时。
+  stream_semantic_idle_timeout: 600
   # Stream keepalive interval (seconds), 0=disable
   # 流式 keepalive 间隔（秒），0=禁用
   stream_keepalive_interval: 10
