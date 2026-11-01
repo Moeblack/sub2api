@@ -1033,6 +1033,9 @@ func anthropicBetaTokensContains(header, token string) bool {
 //   - Convert `tool_use` blocks to text (name/id/input) so we stop sending structured tool calls.
 //   - Convert `tool_result` blocks to text so we keep tool results visible without tool semantics.
 //
+// If any tool_result contains non-text content, the whole request is returned unchanged.
+// This avoids losing media/document semantics or breaking tool pairing on a partial downgrade.
+//
 // Use this only when needed: converting tool blocks to text changes model behaviour and can increase the
 // risk of prompt injection (tool output becomes plain conversation text).
 //
@@ -1159,6 +1162,25 @@ func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel string) []b
 				toolUseID, _ := blockMap["tool_use_id"].(string)
 				isError, _ := blockMap["is_error"].(bool)
 				content := blockMap["content"]
+				// Refuse the entire destructive tool downgrade if a result carries
+				// media (or an unknown shape). Returning the original body keeps
+				// tool_use/result pairing and image/document payloads intact, even
+				// when an earlier tool_use has already been converted in memory.
+				switch value := content.(type) {
+				case nil, string:
+				case []any:
+					for _, part := range value {
+						textBlock, ok := part.(map[string]any)
+						if !ok || textBlock["type"] != "text" {
+							return body
+						}
+						if _, ok := textBlock["text"].(string); !ok {
+							return body
+						}
+					}
+				default:
+					return body
+				}
 				contentJSON, _ := json.Marshal(content)
 				text := "(tool_result)"
 				if toolUseID != "" {

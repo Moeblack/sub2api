@@ -285,6 +285,24 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		return
 	}
 
+	// Streaming updates may omit the entire breakdown or only one TTL. Only
+	// overwrite fields actually present; explicit zero still clears that TTL.
+	cacheCreationTokens := src.CacheCreationInputTokens
+	hasCacheCreationDetails := false
+	if src.CacheCreation != nil {
+		if src.CacheCreation.Ephemeral5mInputTokens != nil {
+			hasCacheCreationDetails = true
+			dst.CacheCreation5mTokens = max(*src.CacheCreation.Ephemeral5mInputTokens, 0)
+		}
+		if src.CacheCreation.Ephemeral1hInputTokens != nil {
+			hasCacheCreationDetails = true
+			dst.CacheCreation1hTokens = max(*src.CacheCreation.Ephemeral1hInputTokens, 0)
+		}
+	}
+	if cacheCreationTokens == 0 && hasCacheCreationDetails {
+		cacheCreationTokens = dst.CacheCreation5mTokens + dst.CacheCreation1hTokens
+	}
+
 	// Some Anthropic-compatible providers retain OpenAI-style prompt/cache
 	// fields. Prefer those authoritative totals or hit/miss buckets over the
 	// overloaded input_tokens field. This covers Kimi's changing stream
@@ -304,10 +322,10 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		if src.PromptCacheMissTokens != nil {
 			dst.InputTokens = max(*src.PromptCacheMissTokens, 0)
 		} else {
-			dst.InputTokens = max(src.PromptTokens-cacheReadTokens-src.CacheCreationInputTokens, 0)
+			dst.InputTokens = max(src.PromptTokens-cacheReadTokens-cacheCreationTokens, 0)
 		}
 		dst.CacheReadInputTokens = cacheReadTokens
-		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		dst.CacheCreationInputTokens = cacheCreationTokens
 	} else {
 		if src.InputTokens > 0 {
 			dst.InputTokens = src.InputTokens
@@ -317,8 +335,8 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 		} else if src.CachedTokens > 0 {
 			dst.CacheReadInputTokens = src.CachedTokens
 		}
-		if src.CacheCreationInputTokens > 0 {
-			dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		if cacheCreationTokens > 0 || hasCacheCreationDetails {
+			dst.CacheCreationInputTokens = cacheCreationTokens
 		}
 	}
 	if src.OutputTokens > 0 {

@@ -162,12 +162,22 @@ type AnthropicPromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
+// AnthropicCacheCreationUsage retains per-TTL cache writes. Pointers distinguish
+// an omitted SSE field from an explicit zero in a later usage update.
+type AnthropicCacheCreationUsage struct {
+	Ephemeral5mInputTokens *int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens *int `json:"ephemeral_1h_input_tokens,omitempty"`
+}
+
 // AnthropicUsage holds token counts in Anthropic format.
 type AnthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+
+	CacheCreation *AnthropicCacheCreationUsage `json:"cache_creation,omitempty"`
+
 	// Anthropic-compatible providers can also expose their native OpenAI-style
 	// total/cache fields. Preserve them so callers can normalize provider totals
 	// into Anthropic's mutually-exclusive billing buckets.

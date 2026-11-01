@@ -86,14 +86,35 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	}
 
 	// reasoning.effort → output_config.effort + thinking
+	// These efforts explicitly opt out of thinking; do not forward them as
+	// output_config values or accidentally turn them into a default budget.
+	if req.Reasoning != nil {
+		switch strings.ToLower(strings.TrimSpace(req.Reasoning.Effort)) {
+		case "none", "minimal", "disabled":
+			return out, nil
+		}
+	}
+
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		effort := mapResponsesEffortToAnthropic(req.Reasoning.Effort)
 		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
 		// Enable thinking for non-low efforts
 		if effort != "low" {
+			budget := defaultThinkingBudget(effort)
+			if req.MaxOutputTokens == nil || *req.MaxOutputTokens <= 0 {
+				// The default must leave room for both thinking and visible output.
+				out.MaxTokens = max(out.MaxTokens, budget+8192)
+			} else if budget >= out.MaxTokens {
+				// Never silently raise a caller's explicit output/spend limit.
+				// Anthropic requires 1024 <= budget_tokens < max_tokens.
+				if out.MaxTokens <= 1024 {
+					return nil, fmt.Errorf("max_output_tokens must exceed 1024 when reasoning effort %q enables thinking", req.Reasoning.Effort)
+				}
+				budget = out.MaxTokens - 1
+			}
 			out.Thinking = &AnthropicThinking{
 				Type:         "enabled",
-				BudgetTokens: defaultThinkingBudget(effort),
+				BudgetTokens: budget,
 			}
 		}
 	}

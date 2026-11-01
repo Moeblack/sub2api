@@ -1670,3 +1670,77 @@ func TestNormalizeGLMOpenAIReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterSignatureSensitiveBlocksForRetry_RefusesNonTextToolResults(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "base64 image",
+			content: `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]`,
+		},
+		{
+			name:    "text and image",
+			content: `[{"type":"text","text":"screenshot"},{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}}]`,
+		},
+		{
+			name:    "PDF document",
+			content: `[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERg=="},"title":"report","citations":{"enabled":true}}]`,
+		},
+		{
+			name:    "text document is still a document",
+			content: `[{"type":"document","source":{"type":"text","media_type":"text/plain","data":"report text"}}]`,
+		},
+		{
+			name:    "unknown block",
+			content: `[{"type":"provider_media","data":{"id":"asset_1"}}]`,
+		},
+		{
+			name:    "malformed text block",
+			content: `[{"type":"text","text":{"nested":"value"}}]`,
+		},
+		{
+			name:    "unknown content shape",
+			content: `{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(`{
+				"thinking":{"type":"enabled","budget_tokens":1024},
+				"messages":[
+					{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"sig"},{"type":"tool_use","id":"t1","name":"inspect","input":{}}]},
+					{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":` + tt.content + `}]}
+				]
+			}`)
+			out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
+			require.Equal(t, input, out, "decline the entire downgrade rather than serialize media into text or orphan a tool result")
+			require.Equal(t, "tool_use", gjson.GetBytes(out, "messages.0.content.1.type").String())
+			require.Equal(t, "t1", gjson.GetBytes(out, "messages.1.content.0.tool_use_id").String())
+		})
+	}
+}
+
+func TestFilterSignatureSensitiveBlocksForRetry_TextToolResultsStillDowngrade(t *testing.T) {
+	for _, content := range []string{
+		`"ordinary tool output"`,
+		`[{"type":"text","text":"ordinary tool output"},{"type":"text","text":"second line"}]`,
+	} {
+		input := []byte(`{
+			"thinking":{"type":"enabled","budget_tokens":1024},
+			"messages":[
+				{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"inspect","input":{"path":"file"}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":` + content + `,"is_error":true}]}
+			]
+		}`)
+		out := FilterSignatureSensitiveBlocksForRetry(input, "claude-sonnet-4-5")
+		require.False(t, gjson.GetBytes(out, "thinking").Exists())
+		require.Equal(t, "text", gjson.GetBytes(out, "messages.0.content.0.type").String())
+		require.Equal(t, "text", gjson.GetBytes(out, "messages.1.content.0.type").String())
+		require.Contains(t, gjson.GetBytes(out, "messages.0.content.0.text").String(), "id=t1")
+		result := gjson.GetBytes(out, "messages.1.content.0.text").String()
+		require.Contains(t, result, "tool_use_id=t1")
+		require.Contains(t, result, "is_error=true")
+		require.Contains(t, result, "ordinary tool output")
+	}
+}

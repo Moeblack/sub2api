@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1941,5 +1942,100 @@ func TestGPT61SolAnthropicEffortPreservesForkSemantics(t *testing.T) {
 				require.Equal(t, want, out.Reasoning.Effort)
 			}
 		})
+	}
+}
+
+func TestResponsesToAnthropicRequest_DefaultThinkingBudgetFitsOutput(t *testing.T) {
+	for _, tt := range []struct {
+		effort string
+		budget int
+	}{
+		{effort: "medium", budget: 4096},
+		{effort: "high", budget: 10240},
+		{effort: "xhigh", budget: 32768},
+	} {
+		t.Run(tt.effort, func(t *testing.T) {
+			out, err := ResponsesToAnthropicRequest(&ResponsesRequest{
+				Model:     "claude-sonnet-4-5",
+				Input:     json.RawMessage(`"hello"`),
+				Reasoning: &ResponsesReasoning{Effort: tt.effort},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, out.Thinking)
+			require.Equal(t, "enabled", out.Thinking.Type)
+			require.Equal(t, tt.budget, out.Thinking.BudgetTokens)
+			require.Greater(t, out.MaxTokens, out.Thinking.BudgetTokens)
+			require.GreaterOrEqual(t, out.MaxTokens-out.Thinking.BudgetTokens, 4096)
+		})
+	}
+}
+
+func TestResponsesToAnthropicRequest_ExplicitOutputLimitNeverIncreases(t *testing.T) {
+	for _, effort := range []string{"medium", "high", "xhigh"} {
+		for _, limit := range []int{1, 1024, 1025, 4096, 8192, 65536} {
+			t.Run(fmt.Sprintf("%s/%d", effort, limit), func(t *testing.T) {
+				out, err := ResponsesToAnthropicRequest(&ResponsesRequest{
+					Model:           "claude-sonnet-4-5",
+					Input:           json.RawMessage(`"hello"`),
+					MaxOutputTokens: &limit,
+					Reasoning:       &ResponsesReasoning{Effort: effort},
+				})
+				if limit <= 1024 {
+					require.ErrorContains(t, err, "max_output_tokens must exceed 1024")
+					require.Nil(t, out)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, limit, out.MaxTokens)
+				require.NotNil(t, out.Thinking)
+				require.Equal(t, min(defaultThinkingBudget(mapResponsesEffortToAnthropic(effort)), limit-1), out.Thinking.BudgetTokens)
+				require.GreaterOrEqual(t, out.Thinking.BudgetTokens, 1024)
+				require.Less(t, out.Thinking.BudgetTokens, out.MaxTokens)
+			})
+		}
+	}
+}
+
+func TestResponsesToAnthropicRequest_ThinkingOffEfforts(t *testing.T) {
+	for _, effort := range []string{"none", "minimal", "disabled", " NONE "} {
+		t.Run(effort, func(t *testing.T) {
+			limit := 512
+			out, err := ResponsesToAnthropicRequest(&ResponsesRequest{
+				Model:           "custom-provider-model-id",
+				Input:           json.RawMessage(`"hello"`),
+				MaxOutputTokens: &limit,
+				Reasoning:       &ResponsesReasoning{Effort: effort},
+			})
+			require.NoError(t, err)
+			require.Nil(t, out.Thinking)
+			require.Nil(t, out.OutputConfig)
+			require.Equal(t, limit, out.MaxTokens)
+			require.Equal(t, "custom-provider-model-id", out.Model)
+		})
+	}
+}
+
+func TestResponsesToAnthropicRequest_CustomModelAndEffortPassThrough(t *testing.T) {
+	out, err := ResponsesToAnthropicRequest(&ResponsesRequest{
+		Model:     "custom-provider-model-id",
+		Input:     json.RawMessage(`"hello"`),
+		Reasoning: &ResponsesReasoning{Effort: "provider-effort"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "custom-provider-model-id", out.Model)
+	require.Equal(t, "provider-effort", out.OutputConfig.Effort)
+	require.Less(t, out.Thinking.BudgetTokens, out.MaxTokens)
+}
+
+func TestAnthropicUsage_CacheCreationRoundTrip(t *testing.T) {
+	for _, raw := range []string{
+		`{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":70}}`,
+		`{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":0}}`,
+	} {
+		var usage AnthropicUsage
+		require.NoError(t, json.Unmarshal([]byte(raw), &usage))
+		encoded, err := json.Marshal(usage)
+		require.NoError(t, err)
+		require.JSONEq(t, raw, string(encoded))
 	}
 }
