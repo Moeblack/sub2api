@@ -1136,6 +1136,28 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it.each([true, false])("disables deprecated CCH signing and preserves its stored value %s", async (storedValue) => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      enable_cch_signing: storedValue,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const toggle = wrapper.get('[data-testid="cch-signing-toggle"]');
+    expect((toggle.element as HTMLInputElement).disabled).toBe(true);
+    expect((toggle.element as HTMLInputElement).checked).toBe(storedValue);
+    expect(enSettings.settings.gatewayForwarding.cchSigningHint).toContain("has no effect");
+    expect(zhSettings.settings.gatewayForwarding.cchSigningHint).toContain("开关无效果");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ enable_cch_signing: storedValue }),
+    );
+  });
+
   it("submits Claude OAuth system prompt injection gateway settings", async () => {
     const blocks = `[{"type":"text","text":"custom block","cache_control":true}]`;
     getSettings.mockResolvedValueOnce({

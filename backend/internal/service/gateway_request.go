@@ -942,8 +942,7 @@ const anthropicBetaContextManagementToken = "context-management-2025-06-27"
 // 缺对应 beta token → strip；客户端 header 已带对应 beta → 保留（不过度删除）。
 // 这将限制完全建立在 "能力维度" 上，与 model 名 / token type / mimicry 子路径无关。
 //
-// 调用约束：必须在 CCH 签名之前调用，否则签名 hash 与最终 body
-// 不一致，上游会以 third-party 拒收。
+// 调用约束：在构造上游请求之前调用，保持最终 body 与 beta 能力声明一致。
 //
 // 返回 (sanitized, changed)：changed 表示是否发生实际删除，供调用方决定
 // 是否重用原 body 引用。

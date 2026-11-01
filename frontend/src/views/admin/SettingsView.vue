@@ -5350,7 +5350,7 @@
                     {{ t("admin.settings.gatewayForwarding.cchSigningHint") }}
                   </p>
                 </div>
-                <Toggle v-model="form.enable_cch_signing" />
+                <Toggle v-model="form.enable_cch_signing" data-testid="cch-signing-toggle" disabled />
               </div>
 
               <!-- Claude OAuth System Prompt Injection -->

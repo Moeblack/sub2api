@@ -330,6 +330,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		for {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
+				if h.handleClaudeCodeOnlyError(c, err, streamStarted) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformGemini)
 					if !cls.ModelNotFound {
@@ -660,6 +663,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			)
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
+				if h.handleClaudeCodeOnlyError(c, err, streamStarted) {
+					return
+				}
 				if len(fs.FailedAccountIDs) == 0 {
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, currentAPIKey, reqModel, reqModel, platform)
 					if !cls.ModelNotFound {
@@ -2181,6 +2187,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// 选择支持该模型的账号
 	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
+		if h.handleClaudeCodeOnlyError(c, err, false) {
+			return
+		}
 		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
 		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
 		if !cls.ModelNotFound {
@@ -2199,6 +2208,17 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.gatewayService.ReleaseAccountSession(context.Background(), account, sessionHash)
 		return
 	}
+}
+
+// handleClaudeCodeOnlyError must precede capacity/model diagnostics: this is a
+// local client policy denial, not an unavailable model or an upstream failure.
+func (h *GatewayHandler) handleClaudeCodeOnlyError(c *gin.Context, err error, streamStarted bool) bool {
+	if !errors.Is(err, service.ErrClaudeCodeOnly) {
+		return false
+	}
+	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+	h.handleStreamingAwareError(c, http.StatusForbidden, "permission_error", service.ErrClaudeCodeOnly.Error(), streamStarted && c.Writer.Written())
+	return true
 }
 
 // InterceptType 表示请求拦截类型
@@ -2230,17 +2250,16 @@ func isMaxTokensOneHaikuRequest(model string, maxTokens int) bool {
 //   - maxTokens: max_tokens 值
 //   - isClaudeCodeClient: 是否已通过 Claude Code 客户端校验
 func detectInterceptType(body []byte, model string, maxTokens int, isClaudeCodeClient bool) InterceptType {
-	// 优先检查 max_tokens=1 + haiku 探测请求（流式/非流式均适用）
-	if isClaudeCodeClient && isMaxTokensOneHaikuRequest(model, maxTokens) {
+	// A validated Claude Code client is necessary, but not enough: only an
+	// explicit auxiliary request may be replaced. Never inspect arbitrary history.
+	if !isClaudeCodeClient {
+		return InterceptTypeNone
+	}
+	if isMaxTokensOneHaikuRequest(model, maxTokens) {
 		return InterceptTypeMaxTokensOneHaiku
 	}
-
-	// 快速检查：如果不包含任何关键字，直接返回
-	bodyStr := string(body)
-	hasSuggestionMode := strings.Contains(bodyStr, "[SUGGESTION MODE:")
-	hasWarmupKeyword := strings.Contains(bodyStr, "title") || strings.Contains(bodyStr, "Warmup")
-
-	if !hasSuggestionMode && !hasWarmupKeyword {
+	// Do not turn other one-token model probes into successful mock responses.
+	if maxTokens == 1 {
 		return InterceptTypeNone
 	}
 
@@ -2261,34 +2280,29 @@ func detectInterceptType(body []byte, model string, maxTokens int, isClaudeCodeC
 		return InterceptTypeNone
 	}
 
-	// 检查 SUGGESTION MODE（最后一条 user 消息）
-	if hasSuggestionMode && len(req.Messages) > 0 {
-		lastMsg := req.Messages[len(req.Messages)-1]
-		if lastMsg.Role == "user" && len(lastMsg.Content) > 0 &&
-			lastMsg.Content[0].Type == "text" &&
-			strings.HasPrefix(lastMsg.Content[0].Text, "[SUGGESTION MODE:") {
-			return InterceptTypeSuggestionMode
-		}
+	if len(req.Messages) == 0 {
+		return InterceptTypeNone
 	}
-
-	// 检查 Warmup 请求
-	if hasWarmupKeyword {
-		// 检查 messages 中的标题提示模式
-		for _, msg := range req.Messages {
-			for _, content := range msg.Content {
-				if content.Type == "text" {
-					if strings.Contains(content.Text, "Please write a 5-10 word title for the following conversation:") ||
-						content.Text == "Warmup" {
-						return InterceptTypeWarmup
-					}
-				}
-			}
-		}
-		// 检查 system 中的标题提取模式
-		for _, sys := range req.System {
-			if strings.Contains(sys.Text, "nalyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title") {
-				return InterceptTypeWarmup
-			}
+	last := req.Messages[len(req.Messages)-1]
+	// Additional blocks may contain real instructions, images, or tool results.
+	if last.Role != "user" || len(last.Content) != 1 || last.Content[0].Type != "text" {
+		return InterceptTypeNone
+	}
+	text := last.Content[0].Text
+	if strings.HasPrefix(text, "[SUGGESTION MODE:") && strings.Contains(text, "]") {
+		return InterceptTypeSuggestionMode
+	}
+	// Warmup and title generation are standalone requests, not turns in an
+	// existing conversation. Prefix matching excludes quotations and examples.
+	if len(req.Messages) != 1 {
+		return InterceptTypeNone
+	}
+	if text == "Warmup" || strings.HasPrefix(text, "Please write a 5-10 word title for the following conversation:\n") {
+		return InterceptTypeWarmup
+	}
+	for _, sys := range req.System {
+		if strings.HasPrefix(sys.Text, "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title") {
+			return InterceptTypeWarmup
 		}
 	}
 

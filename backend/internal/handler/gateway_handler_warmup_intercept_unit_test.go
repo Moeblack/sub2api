@@ -256,10 +256,16 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedScheduli
 	body := []byte(`{
 		"model": "claude-sonnet-4-5",
 		"max_tokens": 256,
+		"system": [{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],
+		"metadata": {"user_id":"user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
 		"messages": [{"role":"user","content":[{"type":"text","text":"Warmup"}]}]
 	}`)
 	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.0")
+	req.Header.Set("X-App", "cli")
+	req.Header.Set("anthropic-beta", "claude-code-20250219")
+	req.Header.Set("anthropic-version", "2023-06-01")
 	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
 	c.Request = req
 
@@ -339,10 +345,16 @@ func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform
 	body := []byte(`{
 		"model": "claude-sonnet-4-5",
 		"max_tokens": 256,
+		"system": [{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],
+		"metadata": {"user_id":"user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
 		"messages": [{"role":"user","content":[{"type":"text","text":"Warmup"}]}]
 	}`)
 	req := httptest.NewRequest("POST", "/antigravity/v1/messages", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "claude-cli/2.1.0")
+	req.Header.Set("X-App", "cli")
+	req.Header.Set("anthropic-beta", "claude-code-20250219")
+	req.Header.Set("anthropic-version", "2023-06-01")
 
 	// 模拟 routes/gateway.go 里的 ForcePlatform 中间件效果：
 	// - 写入 request.Context（Service读取）

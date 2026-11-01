@@ -482,7 +482,7 @@ func TestBuildCountTokensRequestAnthropicAPIKeyPassthrough_StripsContextManageme
 // ============================================================================
 // 集成测试：buildUpstreamRequest
 // 全路径验证上游 outgoing body 与 anthropic-beta header 严格对称。
-// 这个测试能挡住未来某人忘调 sanitize / 将 sanitize 挪到 CCH 之后 等 regression。
+// 这个测试能挡住忘调 sanitize 或 body 与最终 beta 能力声明不一致的 regression。
 // ============================================================================
 
 func TestBuildUpstreamRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd(t *testing.T) {

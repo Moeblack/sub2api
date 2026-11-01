@@ -40,6 +40,57 @@ describe('UseKeyModal', () => {
     saveAsMock.mockClear()
   })
 
+  it('narrows CC-only groups and resets an already selected third-party client', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com',
+        platform: 'anthropic',
+        claudeCodeOnly: false
+      },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: { template: '<span />' }
+        }
+      }
+    })
+    const tabs = () => wrapper.findAll('nav[aria-label="Client"] button')
+    const opencode = tabs().find((button) => button.text().includes('cliTabs.opencode'))
+    expect(opencode).toBeDefined()
+    await opencode!.trigger('click')
+    expect(wrapper.find('pre code').text()).toContain('provider')
+
+    await wrapper.setProps({ claudeCodeOnly: true })
+    expect(tabs()).toHaveLength(1)
+    expect(tabs()[0]!.text()).toContain('cliTabs.claudeCode')
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain('ANTHROPIC_AUTH_TOKEN')
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain('model_provider')
+
+    await wrapper.setProps({ claudeCodeOnly: false })
+    expect(tabs().map((button) => button.text()).join(' ')).toContain('cliTabs.codexCli')
+    expect(tabs().map((button) => button.text()).join(' ')).toContain('cliTabs.opencode')
+  })
+
+  it.each(['openai', 'gemini', 'antigravity', 'grok', 'deepseek', 'minimax', 'composite'] as const)(
+    'preserves existing non-CC-only client capabilities for %s', (platform) => {
+      const wrapper = mount(UseKeyModal, {
+        props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com', platform, allowMessagesDispatch: true },
+        global: {
+          stubs: {
+            BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+            Icon: { template: '<span />' }
+          }
+        }
+      })
+      const labels = wrapper.findAll('nav[aria-label="Client"] button').map((button) => button.text()).join(' ')
+      expect(labels).toContain('cliTabs.codexCli')
+      expect(labels).toContain('cliTabs.opencode')
+      if (platform === 'openai') expect(labels).toContain('cliTabs.codexCliWs')
+    }
+  )
+
   it('omits the attribution override from every standard Claude Code setup form', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
