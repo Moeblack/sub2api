@@ -1946,6 +1946,21 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.stream_data_interval_timeout must be non-negative",
 		},
 		{
+			name:    "gateway semantic idle negative",
+			mutate:  func(c *Config) { c.Gateway.StreamSemanticIdleTimeout = -1 },
+			wantErr: "gateway.stream_semantic_idle_timeout must be non-negative",
+		},
+		{
+			name:    "gateway semantic idle too short",
+			mutate:  func(c *Config) { c.Gateway.StreamSemanticIdleTimeout = 5 },
+			wantErr: "gateway.stream_semantic_idle_timeout must be 0 or between 30-3600 seconds",
+		},
+		{
+			name:    "gateway semantic idle too long",
+			mutate:  func(c *Config) { c.Gateway.StreamSemanticIdleTimeout = 3601 },
+			wantErr: "gateway.stream_semantic_idle_timeout must be 0 or between 30-3600 seconds",
+		},
+		{
 			name:    "gateway image stream keepalive range",
 			mutate:  func(c *Config) { c.Gateway.ImageStreamKeepaliveInterval = 4 },
 			wantErr: "gateway.image_stream_keepalive_interval",
@@ -2598,6 +2613,9 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.StreamDataIntervalTimeout != 180 {
 		t.Fatalf("stream_data_interval_timeout = %d, want 180", cfg.Gateway.StreamDataIntervalTimeout)
+	}
+	if cfg.Gateway.StreamSemanticIdleTimeout != 600 {
+		t.Fatalf("stream_semantic_idle_timeout = %d, want 600", cfg.Gateway.StreamSemanticIdleTimeout)
 	}
 	if cfg.Gateway.StreamKeepaliveInterval != 10 {
 		t.Fatalf("stream_keepalive_interval = %d, want 10", cfg.Gateway.StreamKeepaliveInterval)

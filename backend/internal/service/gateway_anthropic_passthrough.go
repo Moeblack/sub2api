@@ -436,7 +436,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	clientDisconnected := false
 	sawTerminalEvent := false
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := newSemanticSSEScanner(resp, s.cfg)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize

@@ -758,7 +758,8 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 		return nil, usage, acc, errors.New("upstream response body is nil")
 	}
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, stopScanner := s.newUpstreamSSEScanner(resp)
+	defer stopScanner()
 
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
@@ -938,7 +939,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	streamSearchSeen := make(map[string]struct{})
 	countSearch := account != nil && account.IsGrok()
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, stopScanner := s.newUpstreamSSEScanner(resp)
+	defer stopScanner()
 
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {

@@ -162,12 +162,14 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	responseID := ""
 	var firstOutputScanGuard atomic.Bool
 	firstOutputScanGuard.Store(stageFirstOutput)
-	scanner := bufio.NewScanner(resp.Body)
+	var splitLine bufio.SplitFunc
+	if stageFirstOutput {
+		splitLine = openAIFirstOutputDynamicScanLines(&firstOutputScanGuard)
+	}
+	scanner, stopScanner := newSemanticSSEScanner(resp, s.cfg, splitLine)
+	defer stopScanner()
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
-	if stageFirstOutput {
-		scanner.Split(openAIFirstOutputDynamicScanLines(&firstOutputScanGuard))
-	}
 	documentScanner := newOpenAISSEJSONDocumentScanner(scanner)
 
 	streamInterval := time.Duration(0)

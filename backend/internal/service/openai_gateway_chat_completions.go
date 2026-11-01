@@ -697,7 +697,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, stopScanner := s.newUpstreamSSEScanner(resp)
+	defer stopScanner()
 
 	streamInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {

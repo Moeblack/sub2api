@@ -122,8 +122,9 @@ const openAICodexClientVersionSFKey = "openai_codex_client_version"
 
 // cachedClaudeCodeClientVersion 缓存出站 Claude Code 客户端版本号（进程内缓存，60s TTL）
 type cachedClaudeCodeClientVersion struct {
-	version   string
-	expiresAt int64 // unix nano
+	generation uint64
+	version    string
+	expiresAt  int64 // unix nano
 }
 
 const claudeCodeClientVersionCacheTTL = 60 * time.Second
@@ -420,17 +421,21 @@ func (s *SettingService) GetClaudeCodeClientVersion(ctx context.Context) string 
 	if s == nil || s.settingRepo == nil {
 		return fallback
 	}
-	if cached, ok := s.claudeCodeVersionCache.Load().(*cachedClaudeCodeClientVersion); ok && cached != nil {
-		if time.Now().UnixNano() < cached.expiresAt {
-			return cached.version
-		}
+	cached := s.claudeCodeVersionCache.Load()
+	if cached == nil {
+		s.claudeCodeVersionCache.CompareAndSwap(nil, &cachedClaudeCodeClientVersion{})
+		cached = s.claudeCodeVersionCache.Load()
+	}
+	if time.Now().UnixNano() < cached.expiresAt {
+		return cached.version
 	}
 
-	result, _, _ := s.claudeCodeVersionSF.Do(claudeCodeClientVersionSFKey, func() (any, error) {
-		if cached, ok := s.claudeCodeVersionCache.Load().(*cachedClaudeCodeClientVersion); ok && cached != nil {
-			if time.Now().UnixNano() < cached.expiresAt {
-				return cached.version, nil
-			}
+	// Each invalidation starts a separate flight. An older caller may finish with
+	// its snapshot, but only the unchanged generation may publish into the cache.
+	key := claudeCodeClientVersionSFKey + ":" + strconv.FormatUint(cached.generation, 10)
+	result, _, _ := s.claudeCodeVersionSF.Do(key, func() (any, error) {
+		if current := s.claudeCodeVersionCache.Load(); current.generation == cached.generation && time.Now().UnixNano() < current.expiresAt {
+			return current.version, nil
 		}
 		if ctx == nil {
 			ctx = context.Background()
@@ -443,9 +448,10 @@ func (s *SettingService) GetClaudeCodeClientVersion(ctx context.Context) string 
 		})
 		if err != nil {
 			slog.Warn("failed to get claude code client version setting", "error", err)
-			s.claudeCodeVersionCache.Store(&cachedClaudeCodeClientVersion{
-				version:   fallback,
-				expiresAt: time.Now().Add(claudeCodeClientVersionErrorTTL).UnixNano(),
+			s.claudeCodeVersionCache.CompareAndSwap(cached, &cachedClaudeCodeClientVersion{
+				generation: cached.generation,
+				version:    fallback,
+				expiresAt:  time.Now().Add(claudeCodeClientVersionErrorTTL).UnixNano(),
 			})
 			return fallback, nil
 		}
@@ -464,9 +470,10 @@ func (s *SettingService) GetClaudeCodeClientVersion(ctx context.Context) string 
 		if version == "" {
 			version = fallback
 		}
-		s.claudeCodeVersionCache.Store(&cachedClaudeCodeClientVersion{
-			version:   version,
-			expiresAt: time.Now().Add(claudeCodeClientVersionCacheTTL).UnixNano(),
+		s.claudeCodeVersionCache.CompareAndSwap(cached, &cachedClaudeCodeClientVersion{
+			generation: cached.generation,
+			version:    version,
+			expiresAt:  time.Now().Add(claudeCodeClientVersionCacheTTL).UnixNano(),
 		})
 		return version, nil
 	})
@@ -482,8 +489,16 @@ func (s *SettingService) InvalidateClaudeCodeClientVersionCache() {
 	if s == nil {
 		return
 	}
-	s.claudeCodeVersionSF.Forget(claudeCodeClientVersionSFKey)
-	s.claudeCodeVersionCache.Store((*cachedClaudeCodeClientVersion)(nil))
+	for {
+		cached := s.claudeCodeVersionCache.Load()
+		next := &cachedClaudeCodeClientVersion{generation: 1}
+		if cached != nil {
+			next.generation = cached.generation + 1
+		}
+		if s.claudeCodeVersionCache.CompareAndSwap(cached, next) {
+			return
+		}
+	}
 }
 
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。

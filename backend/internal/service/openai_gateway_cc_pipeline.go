@@ -31,15 +31,16 @@ import (
 // （GLM effort 归一化、fast policy、Grok 分支、ClientDisconnect 语义等）仍留在
 // 调用方，属于有意保留的行为差异，不在此强行统一。
 
-// newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，按配置放大单行上限。
-func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) *bufio.Scanner {
-	scanner := bufio.NewScanner(r)
+// newUpstreamSSEScanner constructs the shared, optionally watched SSE scanner.
+// The caller owns stop, including when it exits on a terminal frame before EOF.
+func (s *OpenAIGatewayService) newUpstreamSSEScanner(resp *http.Response) (*bufio.Scanner, func()) {
+	scanner, stop := newSemanticSSEScanner(resp, s.cfg)
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
-	return scanner
+	return scanner, stop
 }
 
 // newStreamHeaderWriter 返回幂等的 SSE 响应头写入闭包：首次调用时透传过滤后的
@@ -265,7 +266,8 @@ func (s *OpenAIGatewayService) scanCCStream(
 ) ccStreamScanState {
 	var st ccStreamScanState
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, stopScanner := s.newUpstreamSSEScanner(resp)
+	defer stopScanner()
 	for scanner.Scan() {
 		line := scanner.Text()
 		payload, ok := extractOpenAISSEDataLine(line)

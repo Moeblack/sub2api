@@ -1043,8 +1043,14 @@ type GatewayConfig struct {
 	// 空闲超过此时间的会话将被自动释放
 	SessionIdleTimeoutMinutes int `mapstructure:"session_idle_timeout_minutes"`
 
-	// StreamDataIntervalTimeout: 流数据间隔超时（秒），0表示禁用
+	// StreamDataIntervalTimeout: transport 流数据间隔超时（秒），0表示禁用；心跳仍算连接活跃。
 	StreamDataIntervalTimeout int `mapstructure:"stream_data_interval_timeout"`
+	// StreamSemanticIdleTimeout: SSE 无语义进展的上游读取等待上限（秒）。
+	// 默认 600（10 分钟），启用范围 30–3600；显式设为 0 可恢复旧的无限心跳排水行为。
+	// 独立于原 transport idle（默认 180 秒），为长思考/预填充保留更宽的无内容等待窗口。
+	// ping/comment/空 delta 不续期；text/thinking/tool delta 续期。这不是总请求 deadline，
+	// 不计下游背压/事件处理耗时，不应用于专用图片流或 WebSocket/ctx_pool。
+	StreamSemanticIdleTimeout int `mapstructure:"stream_semantic_idle_timeout"`
 	// StreamKeepaliveInterval: 流式 keepalive 间隔（秒），0表示禁用
 	StreamKeepaliveInterval int `mapstructure:"stream_keepalive_interval"`
 	// ImageStreamDataIntervalTimeout: 图片流数据间隔超时（秒），0表示禁用
@@ -2480,6 +2486,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.client_idle_ttl_seconds", 900)
 	viper.SetDefault("gateway.concurrency_slot_ttl_minutes", 30) // 并发槽位过期时间（支持超长请求）
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
+	viper.SetDefault("gateway.stream_semantic_idle_timeout", 600)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.image_stream_data_interval_timeout", 900)
 	viper.SetDefault("gateway.image_stream_keepalive_interval", 10)
@@ -3356,6 +3363,13 @@ func (c *Config) Validate() error {
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&
 		(c.Gateway.StreamDataIntervalTimeout < 30 || c.Gateway.StreamDataIntervalTimeout > 300) {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be 0 or between 30-300 seconds")
+	}
+	if c.Gateway.StreamSemanticIdleTimeout < 0 {
+		return fmt.Errorf("gateway.stream_semantic_idle_timeout must be non-negative")
+	}
+	if c.Gateway.StreamSemanticIdleTimeout != 0 &&
+		(c.Gateway.StreamSemanticIdleTimeout < 30 || c.Gateway.StreamSemanticIdleTimeout > 3600) {
+		return fmt.Errorf("gateway.stream_semantic_idle_timeout must be 0 or between 30-3600 seconds")
 	}
 	if c.Gateway.StreamKeepaliveInterval < 0 {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be non-negative")

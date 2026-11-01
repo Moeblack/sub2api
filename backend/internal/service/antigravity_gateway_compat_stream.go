@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -275,7 +274,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 		c.Status(http.StatusOK)
 	}
 	session := newAntigravityCompatStreamSession(originalModel, startTime, adapter, writer)
-	events, stopScanner, maxLineSize := s.startAntigravityCompatScanner(resp.Body)
+	events, stopScanner, maxLineSize := s.startAntigravityCompatScanner(resp)
 	defer stopScanner()
 
 	timeout := s.antigravityCompatStreamTimeout()
@@ -324,13 +323,13 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 }
 
 func (s *AntigravityGatewayService) startAntigravityCompatScanner(
-	body io.Reader,
+	resp *http.Response,
 ) (<-chan antigravityCompatScanEvent, func(), int) {
 	maxLineSize := defaultMaxLineSize
 	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
 	}
-	scanner := bufio.NewScanner(body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 
@@ -356,7 +355,10 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 			send(antigravityCompatScanEvent{err: err})
 		}
 	}()
-	return events, func() { close(done) }, maxLineSize
+	return events, func() {
+		close(done)
+		stopScanner()
+	}, maxLineSize
 }
 
 func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Duration {

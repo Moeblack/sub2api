@@ -300,7 +300,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, stopScanner := s.newUpstreamSSEScanner(resp)
+	defer stopScanner()
 
 	var usage OpenAIUsage
 	var firstTokenMs *int

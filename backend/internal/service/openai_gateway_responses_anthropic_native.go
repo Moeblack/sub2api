@@ -9,7 +9,6 @@ package service
 // 发送/错误处理对齐 OpenAI 网关语义（模型映射、failover、transport error）。
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -161,7 +160,8 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := newSemanticSSEScanner(resp, s.cfg)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
@@ -184,21 +184,22 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 			)
 		}
 	}
-	onIdle := func() (*OpenAIForwardResult, error) {
+	onIdle := func(cause error) (*OpenAIForwardResult, error) {
 		_ = resp.Body.Close()
 		logger.L().Warn("openai responses via native anthropic buffered: data interval timeout",
 			zap.String("request_id", requestID),
 			zap.Duration("interval", streamInterval),
+			zap.Error(cause),
 		)
-		writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream stream data interval timeout")
-		return nil, fmt.Errorf("stream data interval timeout")
+		writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream "+cause.Error())
+		return nil, cause
 	}
 
 	for {
 		line, rerr := pump.next()
 		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
+			if errors.Is(rerr, errAnthropicNativeStreamIdle) || errors.Is(rerr, errStreamSemanticIdle) {
+				return onIdle(rerr)
 			}
 			logReadErr(rerr)
 			break
@@ -210,8 +211,8 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 
 		dataLine, rerr := pump.next()
 		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
+			if errors.Is(rerr, errAnthropicNativeStreamIdle) || errors.Is(rerr, errStreamSemanticIdle) {
+				return onIdle(rerr)
 			}
 			logReadErr(rerr)
 			break
@@ -341,7 +342,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	firstChunk := true
 	clientDisconnected := false
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := newSemanticSSEScanner(resp, s.cfg)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
@@ -380,13 +382,14 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 			)
 		}
 	}
-	onIdle := func() (*OpenAIForwardResult, error) {
+	onIdle := func(cause error) (*OpenAIForwardResult, error) {
 		_ = resp.Body.Close()
 		logger.L().Warn("openai responses via native anthropic stream: data interval timeout",
 			zap.String("request_id", requestID),
 			zap.Duration("interval", streamInterval),
+			zap.Error(cause),
 		)
-		return resultWithUsage(), fmt.Errorf("stream data interval timeout")
+		return resultWithUsage(), cause
 	}
 
 	// 与 CC 姊妹路径（handleCCStreamingFromNativeAnthropic.writeChunk）同语义：
@@ -437,8 +440,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 	for {
 		line, rerr := pump.next()
 		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
+			if errors.Is(rerr, errAnthropicNativeStreamIdle) || errors.Is(rerr, errStreamSemanticIdle) {
+				return onIdle(rerr)
 			}
 			logReadErr(rerr)
 			break
@@ -449,8 +452,8 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 
 		dataLine, rerr := pump.next()
 		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
+			if errors.Is(rerr, errAnthropicNativeStreamIdle) || errors.Is(rerr, errStreamSemanticIdle) {
+				return onIdle(rerr)
 			}
 			logReadErr(rerr)
 			break

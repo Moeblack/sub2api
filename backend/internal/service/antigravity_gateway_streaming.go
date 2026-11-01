@@ -135,7 +135,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	}
 
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -228,6 +229,10 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}, nil
 			}
 			if ev.err != nil {
+				if errors.Is(ev.err, errStreamSemanticIdle) {
+					sendErrorEvent("stream_semantic_timeout")
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}, ev.err
+				}
 				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity gemini"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect}, nil
 				}
@@ -325,7 +330,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	if upstreamResponseModelObserverFromContext(c) == nil {
 		beginUpstreamResponseModelObservation(c)
 	}
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -799,7 +805,8 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	if upstreamResponseModelObserverFromContext(c) == nil {
 		beginUpstreamResponseModelObservation(c)
 	}
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -1018,7 +1025,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 	processor := antigravity.NewStreamingProcessor(originalModel)
 	var firstTokenMs *int
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -1141,6 +1149,10 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 				return &antigravityStreamResult{usage: convertUsage(agUsage), firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}, nil
 			}
 			if ev.err != nil {
+				if errors.Is(ev.err, errStreamSemanticIdle) {
+					sendErrorEvent("stream_semantic_timeout")
+					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}, ev.err
+				}
 				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity claude"); handled {
 					return &antigravityStreamResult{usage: finishUsage(), firstTokenMs: firstTokenMs, clientDisconnect: disconnect}, nil
 				}

@@ -1,10 +1,10 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -165,7 +165,8 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner, stopScanner := s.newAntigravitySSEScanner(resp)
+	defer stopScanner()
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
@@ -242,6 +243,13 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}
 			}
 			if ev.err != nil {
+				if errors.Is(ev.err, errStreamSemanticIdle) {
+					// This passthrough returns collected usage rather than an error;
+					// emit an explicit SSE error instead of a success-shaped EOF.
+					cw.Fprintf("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"upstream_timeout\",\"message\":\"Upstream semantic idle timeout\"}}\n\n")
+					logger.LegacyPrintf("service.antigravity_gateway", "Stream semantic idle timeout (antigravity upstream)")
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: cw.Disconnected()}
+				}
 				if disconnect, handled := handleStreamReadError(ev.err, cw.Disconnected(), "antigravity upstream"); handled {
 					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: disconnect}
 				}
