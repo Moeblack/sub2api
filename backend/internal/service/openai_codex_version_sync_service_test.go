@@ -496,13 +496,16 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 		{"invalid_versions", "latest", "invalid", codexCLIVersion},
 	} {
 		for _, ua := range []struct {
-			name, value, client, suffix string
+			name, value, client, suffix, canonical string
+			fallbackVersion                       bool
 		}{
-			{name: "browser", value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
-			{name: "arbitrary", value: "not-a-codex-client"},
-			{name: "unknown_client", value: "custom/0.140.0 (Linux)"},
+			// Panel configuration preserves the operator's client and suffix; only
+			// its version is rebuilt (private contract retained by 014196699).
+			{name: "browser", value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", canonical: "Mozilla/" + version.want + " (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+			{name: "arbitrary", value: "not-a-codex-client", canonical: "not-a-codex-client", fallbackVersion: true},
+			{name: "unknown_client", value: "custom/0.140.0 (Linux)", canonical: "custom/" + version.want + " (Linux)"},
 			{name: "empty"},
-			{name: "missing_version", value: "codex_cli_rs/"},
+			{name: "missing_version", value: "codex_cli_rs/", canonical: "codex_cli_rs/", fallbackVersion: true},
 			{name: "crlf", value: "codex_cli_rs/0.140.0 (Linux)\r\nX-Injected: value"},
 			{name: "nul", value: "codex_cli_rs/0.140.0 (Linux\x00)"},
 			{name: "del", value: "codex_cli_rs/0.140.0 terminal\x7f"},
@@ -510,7 +513,7 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 			{name: "trailing_newline", value: "codex_cli_rs/0.140.0 (Linux)\n"},
 			{name: "valid_suffix", value: "codex_cli_rs/0.140.0 (Mac OS X 15.1.0; arm64) iTerm.app", client: "codex_cli_rs", suffix: " (Mac OS X 15.1.0; arm64) iTerm.app"},
 			{name: "valid_tab", value: "codex_cli_rs/0.140.0 (Linux)\tterminal", client: "codex_cli_rs", suffix: " (Linux)\tterminal"},
-			{name: "recognized_trailer", value: "custom/0.140.0 (Linux) (codex-tui; 0.140.0)", client: "codex-tui", suffix: " (Linux) (codex-tui; " + version.want + ")"},
+			{name: "recognized_trailer", value: "custom/0.140.0 (Linux) (codex-tui; 0.140.0)", client: "codex-tui", suffix: " (Linux) (codex-tui; " + version.want + ")", canonical: "custom/" + version.want + " (Linux) (codex-tui; " + version.want + ")"},
 		} {
 			t.Run(version.name+"/"+ua.name, func(t *testing.T) {
 				svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
@@ -527,6 +530,18 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 					wantOriginator = ua.client
 				}
 				wantOriginator, wantUA, _ = openai.NormalizeCodexClientIdentityToCLI(wantOriginator, wantUA)
+				if ua.canonical != "" {
+					wantCanonicalUA = ua.canonical
+				}
+				wantVersion := version.want
+				if ua.fallbackVersion {
+					wantVersion = codexCLIVersion
+					wantUA = buildCodexCLIUserAgent(wantVersion)
+					if ua.name == "missing_version" {
+						// Pairing recognizes the client, but cannot rebuild an absent version.
+						wantUA = ua.value
+					}
+				}
 				SetCodexCanonicalUserAgentResolver(func() string {
 					return svc.GetOpenAICodexCanonicalUserAgent(context.Background())
 				})
@@ -534,7 +549,7 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 				identity := resolveCodexOutboundIdentity("")
 				require.Equal(t, wantUA, identity.userAgent)
 				require.Equal(t, wantOriginator, identity.originator)
-				require.Equal(t, version.want, identity.version)
+				require.Equal(t, wantVersion, identity.version)
 			})
 		}
 	}

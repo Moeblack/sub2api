@@ -295,6 +295,37 @@ func TestOpenAIStreamReplayBoundaryPreservesContentAndToolCompletion(t *testing.
 	}
 }
 
+func TestOpenAIStreamTTFTIgnoresFailuresAndKeepalives(t *testing.T) {
+	for _, tc := range []struct {
+		name, data, eventType string
+		semantic, visible     bool
+	}{
+		{name: "created", data: `{"type":"response.created"}`},
+		{name: "in_progress", data: `{"type":"response.in_progress"}`},
+		{name: "keepalive", data: `{"type":"keepalive"}`},
+		{name: "ping", data: `{"type":"ping"}`},
+		{name: "heartbeat", data: `{"type":"heartbeat"}`},
+		{name: "event_only_keepalive", data: `{}`, eventType: "keepalive"},
+		{name: "failed", data: `{"type":"response.failed","response":{"error":{"code":"content_policy_violation"}}}`},
+		{name: "retryable_error", data: `{"type":"error","error":{"code":"server_is_overloaded"}}`},
+		{name: "nonretryable_error", data: `{"type":"error","error":{"code":"content_policy_violation"}}`},
+		{name: "event_only_error", data: `{"error":{"code":"invalid_request"}}`, eventType: "error"},
+		{name: "done", data: "[DONE]"},
+		{name: "empty"},
+		{name: "structural_progress", data: `{"type":"response.output_item.added","item":{"type":"message","content":[]}}`, semantic: true},
+		{name: "text", data: `{"type":"response.output_text.delta","delta":"hello"}`, semantic: true, visible: true},
+		{name: "tool_arguments", data: `{"type":"response.function_call_arguments.delta","delta":"{}"}`, semantic: true, visible: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.semantic, openAIStreamDataStartsSemanticTTFT(tc.data, tc.eventType))
+			for _, forceOutput := range []bool{false, true} {
+				require.Equal(t, tc.semantic, openAIStreamDataStartsTTFT(tc.data, tc.eventType, forceOutput, OpenAITTFTModeSemantic))
+				require.Equal(t, tc.visible, openAIStreamDataStartsTTFT(tc.data, tc.eventType, forceOutput, OpenAITTFTModeVisible))
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamKeepaliveOnlyFailureDoesNotRecordFirstToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, passthrough := range []bool{false, true} {

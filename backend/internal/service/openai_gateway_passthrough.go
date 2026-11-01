@@ -1311,11 +1311,8 @@ func openAIStreamDataStartsSemanticTTFT(data, eventType string) bool {
 		eventType = strings.TrimSpace(gjson.Get(trimmed, "type").String())
 	}
 	switch eventType {
-	case "response.failed":
+	case "response.failed", "error", "keepalive", "ping", "heartbeat":
 		return false
-	case "error":
-		payload := []byte(trimmed)
-		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
 	default:
 		return !openAIStreamEventIsPreamble(eventType)
 	}
@@ -1333,11 +1330,12 @@ func (s *OpenAIGatewayService) openAITTFTMode(ctx context.Context) string {
 	return normalizeOpenAITTFTMode(mode)
 }
 
-func openAIStreamDataStartsTTFT(data, eventType string, forceOutput bool, mode string) bool {
+func openAIStreamDataStartsTTFT(data, eventType string, _ bool, mode string) bool {
 	if mode == OpenAITTFTModeVisible {
 		return openAIStreamDataStartsVisibleOutput(data, eventType)
 	}
-	return forceOutput || openAIStreamDataStartsSemanticTTFT(data, eventType)
+	// Forcing an error to the client is delivery progress, not a first token.
+	return openAIStreamDataStartsSemanticTTFT(data, eventType)
 }
 
 // openAIStreamFailedEventErrorCode 提取流内 failed 事件的错误码（小写），
