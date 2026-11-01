@@ -497,7 +497,7 @@ func TestGetOpenAICodexCanonicalUserAgentOutboundIdentity(t *testing.T) {
 	} {
 		for _, ua := range []struct {
 			name, value, client, suffix, canonical string
-			fallbackVersion                       bool
+			fallbackVersion                        bool
 		}{
 			// Panel configuration preserves the operator's client and suffix; only
 			// its version is rebuilt (private contract retained by 014196699).
