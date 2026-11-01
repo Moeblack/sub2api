@@ -1214,7 +1214,7 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	}
 	field := ""
 	switch strings.TrimSpace(eventType) {
-	case "response.failed":
+	case "response.failed", "keepalive", "ping", "heartbeat":
 		return false
 	case "error":
 		// 上游降载/瞬时故障会先推 {"type":"error"} 帧、再以 response.failed 收尾。

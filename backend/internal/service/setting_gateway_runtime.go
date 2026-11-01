@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"golang.org/x/net/http/httpguts"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -310,7 +311,9 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 			return fallback, nil
 		}
 		ua := strings.TrimSpace(value)
-		if ua == "" {
+		// Validate before trimming so leading/trailing CR/LF cannot be hidden.
+		// Legal operator-defined client names and fingerprints remain untouched.
+		if ua == "" || !httpguts.ValidHeaderFieldValue(value) {
 			ua = fallback
 		}
 		s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
