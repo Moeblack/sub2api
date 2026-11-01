@@ -1,4 +1,4 @@
-> 本仓库为 Sub2API 定制版，详见[源码来源](SOURCE_SNAPSHOT.md)及 [2026-09-08 上游/OpenAI 集成说明](docs/upgrades/2026-09-08-openai.md)。定制编译包请使用[本仓库 Releases](https://github.com/lurenxing628/sub2api/releases)。原文档的镜像、下载和后台更新/回滚来源仍指向上游；直接使用可能覆盖定制修复。
+> 本仓库为 Moeblack 的 Sub2API 定制版，维护上游已切换为 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)；luren 集成只保留为历史来源，不再作为更新基准。详见[源码来源](SOURCE_SNAPSHOT.md)及[历史 OpenAI 集成说明](docs/upgrades/2026-09-08-openai.md)。请使用 [Moeblack Releases](https://github.com/Moeblack/sub2api/releases) 或本 fork 固定提交构建的镜像；后台更新源已指向 Moeblack，不要用上游镜像或旧 `latest` 示例替换定制版。
 
 <div align="center">
 

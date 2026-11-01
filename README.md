@@ -1,4 +1,4 @@
-> This is a customized Sub2API repository. See [source provenance](SOURCE_SNAPSHOT.md) and the [2026-09-08 upstream/OpenAI integration notes](docs/upgrades/2026-09-08-openai.md). Use [this repository's releases](https://github.com/lurenxing628/sub2api/releases) for custom builds. Images, downloads, and the in-app updater inherited from upstream still target the upstream project and can replace custom fixes.
+> This is the Moeblack customized Sub2API repository. The maintained upstream is [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api); historical luren integration is retained, not used as the update baseline. See [source provenance](SOURCE_SNAPSHOT.md) and [historical OpenAI integration notes](docs/upgrades/2026-09-08-openai.md). Use [Moeblack releases](https://github.com/Moeblack/sub2api/releases) and fixed images built from this fork. The in-app updater targets Moeblack; do not replace custom builds with upstream images or `latest` examples.
 
 <div align="center">
 
