@@ -736,6 +736,21 @@ func mergeDropSets(policySet map[string]struct{}, extra ...string) map[string]st
 	return m
 }
 
+// mergeBetaPolicyDropSets returns a request-owned union of defaults and policy
+// maps. Always allocate: mergeDropSets(nil) may alias the shared default set.
+func mergeBetaPolicyDropSets(policySets ...map[string]struct{}) map[string]struct{} {
+	merged := make(map[string]struct{}, len(defaultDroppedBetasSet))
+	for token := range defaultDroppedBetasSet {
+		merged[token] = struct{}{}
+	}
+	for _, policySet := range policySets {
+		for token := range policySet {
+			merged[token] = struct{}{}
+		}
+	}
+	return merged
+}
+
 // betaPolicyFilterSetKey is the gin.Context key for caching the policy filter set within a request.
 const betaPolicyFilterSetKey = "betaPolicyFilterSet"
 

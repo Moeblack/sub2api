@@ -419,7 +419,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if policy.blockErr != nil {
 		return nil, policy.blockErr
 	}
-	drop := mergeDropSets(policy.filterSet, s.getBetaPolicyFilterSet(ctx, c, account, gjson.GetBytes(body, "model").String()))
+	drop := mergeBetaPolicyDropSets(policy.filterSet, s.getBetaPolicyFilterSet(ctx, c, account, gjson.GetBytes(body, "model").String()))
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值：净化以覆写值为准
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
