@@ -340,10 +340,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 6. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	cancelUpstream := func() {}
-	if clientStream {
-		upstreamCtx, cancelUpstream = context.WithCancel(upstreamCtx)
-	}
+	// Both client modes consume an upstream SSE body. Nested scanner cleanup
+	// must be able to cancel its request before Close waits for an active Read.
+	upstreamCtx, cancelUpstream := context.WithCancel(upstreamCtx)
 	defer cancelUpstream()
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 	releaseUpstreamCtx()
@@ -369,6 +368,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Body = &cancelBeforeCloseStreamBody{ReadCloser: resp.Body, cancel: cancelUpstream}
 	defer func() {
 		cancelUpstream()
 		_ = resp.Body.Close()

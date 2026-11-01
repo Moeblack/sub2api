@@ -17,6 +17,26 @@ import (
 
 var errStreamSemanticIdle = errors.New("stream semantic idle timeout")
 
+// Cancellation belongs to the upstream request owner, not the scanner. Wrap its
+// body before handing it to nested consumers so *all* Close paths (normal stop,
+// semantic timeout, transport timeout, or outer cleanup) cancel before a body
+// implementation can wait for its outstanding Read. Cancellation is deferred
+// until close, preserving detached usage draining while the stream is active.
+type cancelBeforeCloseStreamBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+	err    error
+}
+
+func (b *cancelBeforeCloseStreamBody) Close() error {
+	b.once.Do(func() {
+		b.cancel()
+		b.err = b.ReadCloser.Close()
+	})
+	return b.err
+}
+
 // newSemanticSSEScanner observes the original wire lines without rewriting them.
 // The existing transport-idle timers remain independent. The semantic timer
 // (600s by default, explicit 0 disables) ignores heartbeats, not total duration. Dedicated

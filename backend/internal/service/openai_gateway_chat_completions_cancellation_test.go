@@ -114,3 +114,44 @@ func TestForwardAsChatCompletions_CancelsUpstreamBeforeClosingBody(t *testing.T)
 		t.Fatal("ForwardAsChatCompletions did not cancel upstream before closing the body")
 	}
 }
+
+func TestSemanticSSEScanner_CancelBeforeCloseBody(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		interval time.Duration
+		timeout  bool
+	}{
+		{name: "disabled watchdog early stop"},
+		{name: "enabled watchdog early stop", interval: time.Hour},
+		{name: "watchdog expiry", interval: 50 * time.Millisecond, timeout: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stream := newContextBoundBlockingReadCloser(nil)
+			stream.ctx = ctx
+			t.Cleanup(stream.forceUnblock)
+			body := &cancelBeforeCloseStreamBody{ReadCloser: stream, cancel: cancel}
+			scanner, stop := newSemanticSSEScannerWithInterval(ctx, body, tt.interval)
+			done := consumeSemanticScanner(scanner)
+			if tt.timeout {
+				require.ErrorIs(t, waitSemanticScan(t, done), errStreamSemanticIdle)
+			} else {
+				stopped := make(chan struct{})
+				go func() {
+					stop()
+					close(stopped)
+				}()
+				select {
+				case <-stopped:
+				case <-time.After(time.Second):
+					t.Fatal("scanner Close waited for cancellation owned by its caller")
+				}
+				require.ErrorIs(t, waitSemanticScan(t, done), context.Canceled)
+			}
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			stop()
+			require.NoError(t, body.Close(), "repeated cleanup must remain safe")
+		})
+	}
+}
